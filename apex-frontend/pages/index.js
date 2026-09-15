@@ -427,6 +427,59 @@ export default function Home() {
     document.body.removeChild(link);
   };
 
+  
+  // 2D DCF Sensitivity Matrix Generator
+  const generateSensitivityMatrix = () => {
+    if (!data) return { waccSteps: [], gSteps: [], matrix: [] };
+    const baseFCF = 105.0;
+    const g = growthRate / 100;
+    const sharesOutstanding = 15.3;
+
+    // Steps centered around current slider settings
+    const waccSteps = [
+      discountRate - 1.5,
+      discountRate - 0.75,
+      discountRate,
+      discountRate + 0.75,
+      discountRate + 1.5
+    ].map(w => Math.round(w * 100) / 100);
+
+    const gSteps = [
+      terminalGrowth - 1.0,
+      terminalGrowth - 0.5,
+      terminalGrowth,
+      terminalGrowth + 0.5,
+      terminalGrowth + 1.0
+    ].map(tg => Math.round(tg * 100) / 100);
+
+    const matrix = waccSteps.map(waccVal => {
+      const r = waccVal / 100;
+      return gSteps.map(gVal => {
+        const tg = gVal / 100;
+        if (r <= tg) return { fairValue: 0, upside: -100 };
+
+        let pvFutureFCF = 0;
+        let currentFCF = baseFCF;
+        for (let i = 1; i <= 5; i++) {
+          currentFCF *= (1 + g);
+          pvFutureFCF += currentFCF / Math.pow(1 + r, i);
+        }
+
+        const terminalValue = (currentFCF * (1 + tg)) / (r - tg);
+        const pvTerminalValue = terminalValue / Math.pow(1 + r, 5);
+        const enterpriseValue = pvFutureFCF + pvTerminalValue;
+        const fairValue = Math.round(((enterpriseValue * 1000) / (sharesOutstanding * 1000)) * 100) / 100;
+        const upside = Math.round(((fairValue - data.price) / data.price) * 1000) / 10;
+
+        return { fairValue, upside, isCenter: waccVal === discountRate && gVal === terminalGrowth };
+      });
+    });
+
+    return { waccSteps, gSteps, matrix };
+  };
+
+  const sensitivity = generateSensitivityMatrix();
+
   const dcfResult = calculateDCF();
   const isCurrentPinned = data && watchlist.some(w => w.symbol === data.symbol);
 
@@ -911,6 +964,91 @@ export default function Home() {
                           onChange={(e) => setTerminalGrowth(parseFloat(e.target.value))}
                           style={{ width: "100%", accentColor: "#00d09c", cursor: "pointer" }}
                         />
+                      </div>
+                    </div>
+
+                    {/* 2D DCF Sensitivity Matrix Heatmap */}
+                    <div style={{ marginTop: "24px", paddingTop: "20px", borderTop: `1px solid ${theme.border}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                        <div>
+                          <strong style={{ fontSize: "0.9rem", color: theme.text }}>Two-Dimensional Valuation Sensitivity Matrix</strong>
+                          <div style={{ fontSize: "0.72rem", color: theme.textSub }}>
+                            Fair Value per share ($) cross-tabulated against Discount Rate (WACC) & Perpetual Growth Rate
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: "12px", fontSize: "0.7rem", fontWeight: 700 }}>
+                          <span style={{ color: "#00d09c" }}>● Undervalued (Upside)</span>
+                          <span style={{ color: "#eb5757" }}>● Overvalued (Downside)</span>
+                        </div>
+                      </div>
+
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "center", fontSize: "0.76rem" }}>
+                          <thead>
+                            <tr>
+                              <th style={{ padding: "8px", border: `1px solid ${theme.border}`, background: theme.cardSub, color: theme.textSub }}>
+                                WACC \ Terminal g
+                              </th>
+                              {sensitivity.gSteps.map(gVal => (
+                                <th
+                                  key={gVal}
+                                  style={{
+                                    padding: "8px",
+                                    border: `1px solid ${theme.border}`,
+                                    background: gVal === terminalGrowth ? "rgba(56, 189, 248, 0.15)" : theme.cardSub,
+                                    color: gVal === terminalGrowth ? "#38bdf8" : theme.text,
+                                    fontWeight: gVal === terminalGrowth ? 800 : 600
+                                  }}
+                                >
+                                  {gVal}%
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {sensitivity.waccSteps.map((waccVal, rIdx) => (
+                              <tr key={waccVal}>
+                                <td
+                                  style={{
+                                    padding: "8px",
+                                    border: `1px solid ${theme.border}`,
+                                    background: waccVal === discountRate ? "rgba(56, 189, 248, 0.15)" : theme.cardSub,
+                                    color: waccVal === discountRate ? "#38bdf8" : theme.text,
+                                    fontWeight: waccVal === discountRate ? 800 : 600
+                                  }}
+                                >
+                                  {waccVal}%
+                                </td>
+                                {sensitivity.matrix[rIdx].map((cell, cIdx) => {
+                                  const isGreen = cell.upside >= 0;
+                                  const absUpside = Math.min(Math.abs(cell.upside), 50);
+                                  const alpha = 0.08 + (absUpside / 50) * 0.35;
+                                  const cellBg = isGreen
+                                    ? `rgba(0, 208, 156, ${alpha})`
+                                    : `rgba(235, 87, 87, ${alpha})`;
+
+                                  return (
+                                    <td
+                                      key={cIdx}
+                                      style={{
+                                        padding: "10px 6px",
+                                        border: cell.isCenter ? "2px solid #38bdf8" : `1px solid ${theme.border}`,
+                                        background: cellBg,
+                                        fontWeight: cell.isCenter ? 900 : 700,
+                                        color: isGreen ? (darkMode ? "#6ee7b7" : "#047857") : (darkMode ? "#fca5a5" : "#b91c1c")
+                                      }}
+                                    >
+                                      <div>${cell.fairValue}</div>
+                                      <div style={{ fontSize: "0.65rem", opacity: 0.85 }}>
+                                        {cell.upside >= 0 ? "+" : ""}{cell.upside}%
+                                      </div>
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     </div>
                   </div>
