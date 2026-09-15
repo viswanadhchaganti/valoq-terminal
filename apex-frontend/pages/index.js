@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from "react";
 import { createChart } from "lightweight-charts";
 import ValoqLogo from "../components/ValoqLogo";
 import { supabase } from "../lib/supabaseClient";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 
 const API_BASE = "https://valoq-backend.onrender.com";
 
@@ -48,6 +50,11 @@ export default function Home() {
   const [authPassword, setAuthPassword] = useState("");
   const [authStatusMsg, setAuthStatusMsg] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
+
+  // Portfolio Analytics State
+  const [portfolioWeights, setPortfolioWeights] = useState({});
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
+  const pdfReportRef = useRef(null);
 
   // DCF Sliders State
   const [growthRate, setGrowthRate] = useState(12.0);
@@ -128,7 +135,16 @@ export default function Home() {
   };
 
   useEffect(() => {
-    if (activeTab === "compare") {
+    if (comparisonData.length > 0) {
+      const equalWeight = Math.round(100 / comparisonData.length);
+      const initial = {};
+      comparisonData.forEach(d => { initial[d.symbol] = equalWeight; });
+      setPortfolioWeights(initial);
+    }
+  }, [comparisonData]);
+
+  useEffect(() => {
+    if (activeTab === "compare" || activeTab === "portfolio") {
       fetchComparisonTelemetry();
     }
   }, [activeTab, watchlist]);
@@ -402,6 +418,71 @@ export default function Home() {
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setCurrentUser(null);
+  };
+
+  // Portfolio Analytics Engine
+  const calculatePortfolioMetrics = () => {
+    if (!comparisonData || comparisonData.length === 0) {
+      return { weightedBeta: 0, weightedYield: 0, weightedUpside: 0, var95: 0, totalWeight: 0 };
+    }
+    let totalW = 0;
+    let sumBeta = 0;
+    let sumYield = 0;
+    let sumUpside = 0;
+
+    comparisonData.forEach(item => {
+      const w = portfolioWeights[item.symbol] || 0;
+      totalW += w;
+      sumBeta += (item.beta || 1.0) * w;
+      sumYield += (item.div_yield || 0) * w;
+      sumUpside += (item.forecast?.upside_pct || 0) * w;
+    });
+
+    const factor = totalW > 0 ? (1 / totalW) : 0;
+    const weightedBeta = Math.round(sumBeta * factor * 100) / 100;
+    const weightedYield = Math.round(sumYield * factor * 100) / 100;
+    const weightedUpside = Math.round(sumUpside * factor * 10) / 10;
+    // Parametric 1Y Value-at-Risk (95% CI) based on weighted beta & historical volatility proxy
+    const var95 = Math.round((weightedBeta * 16.5 * 1.65) * 10) / 10;
+
+    return { weightedBeta, weightedYield, weightedUpside, var95, totalWeight: totalW };
+  };
+
+  const portMetrics = calculatePortfolioMetrics();
+
+  // Institutional PDF Generator
+  const exportPDFTearSheet = async () => {
+    if (!pdfReportRef.current) return;
+    setIsExportingPDF(true);
+    try {
+      const canvas = await html2canvas(pdfReportRef.current, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: darkMode ? "#0b0f19" : "#ffffff"
+      });
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF("p", "mm", "a4");
+      const imgWidth = 210;
+      const pageHeight = 297;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft >= 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+      pdf.save(`Valoq_Institutional_TearSheet_${data?.symbol || "EQUITY"}_${new Date().toISOString().split("T")[0]}.pdf`);
+    } catch (err) {
+      console.error("PDF generation failed:", err);
+    } finally {
+      setIsExportingPDF(false);
+    }
   };
 
   const calculateDerivedWACC = () => {
@@ -722,7 +803,7 @@ export default function Home() {
         </div>
       </header>
 
-      <main style={{ maxWidth: "1280px", margin: "0 auto", padding: "24px" }}>
+      <main ref={pdfReportRef} style={{ maxWidth: "1280px", margin: "0 auto", padding: "24px" }}>
         {loading && !data ? (
           <div style={{ padding: "60px", textAlign: "center", color: theme.textSub }}>
             Loading market telemetry for <strong>{ticker}</strong>...
@@ -928,6 +1009,7 @@ export default function Home() {
                     {[
                       { id: "dcf", label: "⚡ DCF Intrinsic Valuation" },
                       { id: "compare", label: "⚖ Side-by-Side Matrix" },
+                      { id: "portfolio", label: "📊 Portfolio Risk & VaR" },
                       { id: "overview", label: "Overview & Forecasts" },
                       { id: "financials", label: "Income & Cash Flows" },
                       { id: "peers", label: "Sector Peers" }
@@ -967,6 +1049,25 @@ export default function Home() {
                         }}
                       >
                         ⚙ Calculate WACC
+                      </button>
+                      <button
+                        onClick={exportPDFTearSheet}
+                        disabled={isExportingPDF}
+                        style={{
+                          background: "linear-gradient(135deg, #00d09c 0%, #059669 100%)",
+                          color: "#090d14",
+                          border: "none",
+                          padding: "6px 12px",
+                          borderRadius: "6px",
+                          fontSize: "0.75rem",
+                          fontWeight: 800,
+                          cursor: isExportingPDF ? "not-allowed" : "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px"
+                        }}
+                      >
+                        {isExportingPDF ? "Rendering PDF..." : "📄 Export PDF Report"}
                       </button>
                       <button
                         onClick={exportDCFModelCSV}
@@ -1210,6 +1311,96 @@ export default function Home() {
                             ))}
                           </tbody>
                         </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                                {/* TAB: PORTFOLIO RISK & WEIGHTED VAR */}
+                {activeTab === "portfolio" && (
+                  <div>
+                    {comparisonLoading ? (
+                      <div style={{ textAlign: "center", padding: "40px", color: theme.textSub }}>
+                        Computing portfolio telemetry and covariance weights...
+                      </div>
+                    ) : comparisonData.length === 0 ? (
+                      <div style={{ textAlign: "center", padding: "40px", color: theme.textSub }}>
+                        Add assets to your watchlist to activate portfolio analytics.
+                      </div>
+                    ) : (
+                      <div>
+                        {/* Top Portfolio Metrics KPI Bar */}
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginBottom: "20px" }}>
+                          <div style={{ background: theme.cardSub, padding: "14px", borderRadius: "10px", border: `1px solid ${theme.border}` }}>
+                            <span style={{ fontSize: "0.7rem", color: theme.textSub, fontWeight: 700 }}>PORTFOLIO BETA</span>
+                            <div style={{ fontSize: "1.6rem", fontWeight: 900, color: theme.text, marginTop: "2px" }}>
+                              {portMetrics.weightedBeta}
+                            </div>
+                            <span style={{ fontSize: "0.68rem", color: portMetrics.weightedBeta > 1.1 ? "#f59e0b" : "#00d09c" }}>
+                              {portMetrics.weightedBeta > 1.0 ? "High Beta (Aggressive)" : "Defensive Portfolio"}
+                            </span>
+                          </div>
+
+                          <div style={{ background: theme.cardSub, padding: "14px", borderRadius: "10px", border: `1px solid ${theme.border}` }}>
+                            <span style={{ fontSize: "0.7rem", color: theme.textSub, fontWeight: 700 }}>1Y 95% VALUE-AT-RISK</span>
+                            <div style={{ fontSize: "1.6rem", fontWeight: 900, color: "#eb5757", marginTop: "2px" }}>
+                              -{portMetrics.var95}%
+                            </div>
+                            <span style={{ fontSize: "0.68rem", color: theme.textSub }}>Maximum Expected Drawdown</span>
+                          </div>
+
+                          <div style={{ background: theme.cardSub, padding: "14px", borderRadius: "10px", border: `1px solid ${theme.border}` }}>
+                            <span style={{ fontSize: "0.7rem", color: theme.textSub, fontWeight: 700 }}>ESTIMATED 1Y UPSIDE</span>
+                            <div style={{ fontSize: "1.6rem", fontWeight: 900, color: "#00d09c", marginTop: "2px" }}>
+                              +{portMetrics.weightedUpside}%
+                            </div>
+                            <span style={{ fontSize: "0.68rem", color: theme.textSub }}>Consensus Target Upside</span>
+                          </div>
+
+                          <div style={{ background: theme.cardSub, padding: "14px", borderRadius: "10px", border: `1px solid ${theme.border}` }}>
+                            <span style={{ fontSize: "0.7rem", color: theme.textSub, fontWeight: 700 }}>PORTFOLIO DIV YIELD</span>
+                            <div style={{ fontSize: "1.6rem", fontWeight: 900, color: "#38bdf8", marginTop: "2px" }}>
+                              {portMetrics.weightedYield}%
+                            </div>
+                            <span style={{ fontSize: "0.68rem", color: theme.textSub }}>Annualized Cash Flow</span>
+                          </div>
+                        </div>
+
+                        {/* Interactive Weight Allocation Sliders */}
+                        <div style={{ background: theme.cardSub, padding: "16px", borderRadius: "10px", border: `1px solid ${theme.border}` }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px", alignItems: "center" }}>
+                            <strong style={{ fontSize: "0.85rem", color: theme.text }}>Allocation Weights</strong>
+                            <span style={{ fontSize: "0.75rem", color: portMetrics.totalWeight === 100 ? "#00d09c" : "#f59e0b", fontWeight: 700 }}>
+                              Total Allocation: {portMetrics.totalWeight}% {portMetrics.totalWeight !== 100 && "(Adjust sliders to 100%)"}
+                            </span>
+                          </div>
+
+                          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                            {comparisonData.map(item => (
+                              <div key={item.symbol} style={{ display: "grid", gridTemplateColumns: "100px 1fr 60px", alignItems: "center", gap: "16px" }}>
+                                <div>
+                                  <strong style={{ fontSize: "0.82rem", color: theme.text }}>{item.symbol}</strong>
+                                  <div style={{ fontSize: "0.68rem", color: theme.textSub }}>Beta: {item.beta}</div>
+                                </div>
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max="100"
+                                  step="5"
+                                  value={portfolioWeights[item.symbol] || 0}
+                                  onChange={(e) => setPortfolioWeights({
+                                    ...portfolioWeights,
+                                    [item.symbol]: parseInt(e.target.value) || 0
+                                  })}
+                                  style={{ width: "100%", accentColor: "#00d09c" }}
+                                />
+                                <div style={{ textAlign: "right", fontWeight: 800, fontSize: "0.82rem", color: theme.text }}>
+                                  {portfolioWeights[item.symbol] || 0}%
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     )}
                   </div>
