@@ -17,16 +17,21 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
+  // Theme State (Dark / Light)
+  const [darkMode, setDarkMode] = useState(false);
+
   // Technical Overlays & Oscillators
   const [showEMA50, setShowEMA50] = useState(true);
   const [showSMA200, setShowSMA200] = useState(true);
   const [showRSI, setShowRSI] = useState(true);
 
-  // Watchlist State
+  // Watchlist State & Comparison Matrix
   const [watchlist, setWatchlist] = useState([]);
   const [showWatchlistDrawer, setShowWatchlistDrawer] = useState(false);
   const [editingNotes, setEditingNotes] = useState({});
   const [editingTarget, setEditingTarget] = useState({});
+  const [comparisonData, setComparisonData] = useState([]);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
 
   // AI Drawer State
   const [showAIDrawer, setShowAIDrawer] = useState(false);
@@ -39,10 +44,31 @@ export default function Home() {
   const [discountRate, setDiscountRate] = useState(8.5);
   const [terminalGrowth, setTerminalGrowth] = useState(3.0);
 
+  // WACC Calculator Modal State
+  const [showWaccModal, setShowWaccModal] = useState(false);
+  const [riskFreeRate, setRiskFreeRate] = useState(4.25);
+  const [equityRiskPremium, setEquityRiskPremium] = useState(5.0);
+  const [costOfDebt, setCostOfDebt] = useState(5.2);
+  const [taxRate, setTaxRate] = useState(21.0);
+  const [equityWeight, setEquityWeight] = useState(85.0);
+
   const mainChartContainerRef = useRef(null);
   const rsiChartContainerRef = useRef(null);
   const mainChartInstance = useRef(null);
   const rsiChartInstance = useRef(null);
+
+  // Color Tokens based on Theme
+  const theme = {
+    bg: darkMode ? "#0b0f19" : "#f7f9fb",
+    cardBg: darkMode ? "#111827" : "#ffffff",
+    cardSub: darkMode ? "#1a2234" : "#f8fafc",
+    border: darkMode ? "#1f293d" : "#e2e8f0",
+    text: darkMode ? "#f3f4f6" : "#0f172a",
+    textSub: darkMode ? "#94a3b8" : "#64748b",
+    chartBg: darkMode ? "#111827" : "#ffffff",
+    gridLines: darkMode ? "#1a2234" : "#f8fafc",
+    headerBg: darkMode ? "#0e1422" : "#ffffff"
+  };
 
   const fetchStock = async (sym, period) => {
     setLoading(true);
@@ -71,6 +97,30 @@ export default function Home() {
       console.error(e);
     }
   };
+
+  const fetchComparisonTelemetry = async () => {
+    if (!watchlist || watchlist.length === 0) return;
+    setComparisonLoading(true);
+    try {
+      const promises = watchlist.map(item =>
+        fetch(`${API_BASE}/api/v1/stock/quote?symbol=${item.symbol}&period=1y`)
+          .then(r => (r.ok ? r.json() : null))
+          .catch(() => null)
+      );
+      const results = await Promise.all(promises);
+      setComparisonData(results.filter(Boolean));
+    } catch (err) {
+      console.error("Failed to load comparison batch", err);
+    } finally {
+      setComparisonLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "compare") {
+      fetchComparisonTelemetry();
+    }
+  }, [activeTab, watchlist]);
 
   const saveWatchlistEdits = async (sym) => {
     const payload = {};
@@ -137,7 +187,7 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [query]);
 
-  // Main Chart + RSI Sub-panel Synchronized Setup
+  // Synchronized Multi-Chart Setup (Main + RSI) with Theme Reactive Sync
   useEffect(() => {
     if (!data || !mainChartContainerRef.current || !data.candles || data.candles.length === 0) return;
 
@@ -156,15 +206,15 @@ export default function Home() {
       .filter((v, i, a) => a.findIndex(t => t.time === v.time) === i)
       .sort((a, b) => a.time - b.time);
 
-    // Main Canvas
+    // Primary Candlestick Canvas
     const chart = createChart(mainChartContainerRef.current, {
       width: mainChartContainerRef.current.clientWidth,
       height: 320,
-      layout: { background: { color: "#ffffff" }, textColor: "#64748b" },
-      grid: { vertLines: { color: "#f8fafc" }, horzLines: { color: "#f8fafc" } },
-      rightPriceScale: { borderColor: "#e2e8f0" },
+      layout: { background: { color: theme.chartBg }, textColor: theme.textSub },
+      grid: { vertLines: { color: theme.gridLines }, horzLines: { color: theme.gridLines } },
+      rightPriceScale: { borderColor: theme.border },
       timeScale: { 
-        borderColor: "#e2e8f0",
+        borderColor: theme.border,
         timeVisible: timeframe === "1d" || timeframe === "5d",
         visible: !showRSI
       }
@@ -198,7 +248,7 @@ export default function Home() {
     }
 
     if (showEMA50) {
-      const emaSeries = chart.addLineSeries({ color: "#2563eb", lineWidth: 2, title: "50 EMA" });
+      const emaSeries = chart.addLineSeries({ color: "#3b82f6", lineWidth: 2, title: "50 EMA" });
       emaSeries.setData(sortedCandles.filter(c => c.ema50 !== null).map(c => ({ time: c.time, value: c.ema50 })));
     }
 
@@ -208,7 +258,7 @@ export default function Home() {
     }
 
     const volumeSeries = chart.addHistogramSeries({
-      color: "#cbd5e1",
+      color: darkMode ? "#334155" : "#cbd5e1",
       priceFormat: { type: "volume" },
       priceScaleId: "",
       scaleMargins: { top: 0.8, bottom: 0 }
@@ -216,38 +266,36 @@ export default function Home() {
     volumeSeries.setData(sortedCandles.map(c => ({
       time: c.time,
       value: c.volume,
-      color: c.close >= c.open ? "rgba(0, 208, 156, 0.35)" : "rgba(235, 87, 87, 0.35)"
+      color: c.close >= c.open ? "rgba(0, 208, 156, 0.4)" : "rgba(235, 87, 87, 0.4)"
     })));
 
-    // RSI Oscillator Panel
+    // Synchronized RSI Oscillator Canvas
     if (showRSI && rsiChartContainerRef.current) {
       const rsiChart = createChart(rsiChartContainerRef.current, {
         width: rsiChartContainerRef.current.clientWidth,
         height: 120,
-        layout: { background: { color: "#ffffff" }, textColor: "#64748b" },
-        grid: { vertLines: { color: "#f8fafc" }, horzLines: { color: "#f8fafc" } },
-        rightPriceScale: { borderColor: "#e2e8f0", scaleMargins: { top: 0.1, bottom: 0.1 } },
+        layout: { background: { color: theme.chartBg }, textColor: theme.textSub },
+        grid: { vertLines: { color: theme.gridLines }, horzLines: { color: theme.gridLines } },
+        rightPriceScale: { borderColor: theme.border, scaleMargins: { top: 0.1, bottom: 0.1 } },
         timeScale: { 
-          borderColor: "#e2e8f0",
+          borderColor: theme.border,
           timeVisible: timeframe === "1d" || timeframe === "5d"
         }
       });
       rsiChartInstance.current = rsiChart;
 
       const rsiSeries = rsiChart.addLineSeries({
-        color: "#8b5cf6",
+        color: "#a855f7",
         lineWidth: 2,
         title: "RSI (14)"
       });
       rsiSeries.setData(sortedCandles.map(c => ({ time: c.time, value: c.rsi })));
 
-      // Overbought 70 and Oversold 30 threshold reference bands
       const overboughtLine = rsiChart.addLineSeries({ color: "#ef4444", lineStyle: 2, lineWidth: 1 });
       const oversoldLine = rsiChart.addLineSeries({ color: "#10b981", lineStyle: 2, lineWidth: 1 });
       overboughtLine.setData(sortedCandles.map(c => ({ time: c.time, value: 70 })));
       oversoldLine.setData(sortedCandles.map(c => ({ time: c.time, value: 30 })));
 
-      // Synchronize horizontal scrolling/zooming between charts
       chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
         if (range) rsiChart.timeScale().setVisibleLogicalRange(range);
       });
@@ -277,7 +325,7 @@ export default function Home() {
         rsiChartInstance.current = null;
       }
     };
-  }, [data, chartType, showEMA50, showSMA200, showRSI]);
+  }, [data, chartType, showEMA50, showSMA200, showRSI, darkMode]);
 
   const togglePinWatchlist = async () => {
     if (!data) return;
@@ -296,6 +344,23 @@ export default function Home() {
     setShowDropdown(false);
   };
 
+  // CAPM & WACC Mathematical Calculation
+  const calculateDerivedWACC = () => {
+    const beta = data?.beta || 1.05;
+    const costOfEquity = riskFreeRate + (beta * equityRiskPremium);
+    const afterTaxCostOfDebt = costOfDebt * (1 - (taxRate / 100));
+    const debtWeight = 100 - equityWeight;
+    const derivedWacc = ((equityWeight / 100) * costOfEquity) + ((debtWeight / 100) * afterTaxCostOfDebt);
+    return {
+      costOfEquity: Math.round(costOfEquity * 100) / 100,
+      afterTaxCostOfDebt: Math.round(afterTaxCostOfDebt * 100) / 100,
+      wacc: Math.round(derivedWacc * 100) / 100
+    };
+  };
+
+  const waccValues = calculateDerivedWACC();
+
+  // DCF Intrinsic Formula
   const calculateDCF = () => {
     if (!data) return { fairValue: 0, marginOfSafety: 0, enterpriseValue: 0, pvFutureFCF: 0, pvTerminalValue: 0 };
     const baseFCF = 105.0;
@@ -366,15 +431,36 @@ export default function Home() {
   const isCurrentPinned = data && watchlist.some(w => w.symbol === data.symbol);
 
   return (
-    <div style={{ background: "#f7f9fb", minHeight: "100vh", fontFamily: "sans-serif", color: "#1a202c" }}>
-      <div style={{ background: "#fff", padding: "6px 24px", borderBottom: "1px solid #e2e8f0", fontSize: "0.74rem", display: "flex", gap: "20px", overflowX: "auto" }}>
-        <span><strong>S&P 500:</strong> 5,626.02 <span style={{ color: "#00d09c" }}>+0.54% ▲</span></span>
-        <span><strong>NASDAQ:</strong> 17,683.98 <span style={{ color: "#00d09c" }}>+0.65% ▲</span></span>
-        <span><strong>DOW JONES:</strong> 41,393.78 <span style={{ color: "#00d09c" }}>+0.32% ▲</span></span>
-        <span><strong>GOLD:</strong> $2,584.10 <span style={{ color: "#00d09c" }}>+0.95% ▲</span></span>
+    <div style={{ background: theme.bg, minHeight: "100vh", fontFamily: "sans-serif", color: theme.text, transition: "background 0.2s, color 0.2s" }}>
+      {/* Global Macro Bar */}
+      <div style={{ background: theme.cardBg, padding: "6px 24px", borderBottom: `1px solid ${theme.border}`, fontSize: "0.74rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: "20px", overflowX: "auto" }}>
+          <span><strong>S&P 500:</strong> 5,626.02 <span style={{ color: "#00d09c" }}>+0.54% ▲</span></span>
+          <span><strong>NASDAQ:</strong> 17,683.98 <span style={{ color: "#00d09c" }}>+0.65% ▲</span></span>
+          <span><strong>DOW JONES:</strong> 41,393.78 <span style={{ color: "#00d09c" }}>+0.32% ▲</span></span>
+          <span><strong>GOLD:</strong> $2,584.10 <span style={{ color: "#00d09c" }}>+0.95% ▲</span></span>
+        </div>
+
+        {/* Theme Toggle Button */}
+        <button
+          onClick={() => setDarkMode(!darkMode)}
+          style={{
+            background: darkMode ? "#1e293b" : "#f1f5f9",
+            color: darkMode ? "#fbbf24" : "#475569",
+            border: `1px solid ${theme.border}`,
+            padding: "4px 10px",
+            borderRadius: "6px",
+            fontSize: "0.74rem",
+            fontWeight: 800,
+            cursor: "pointer"
+          }}
+        >
+          {darkMode ? "☀ Light Mode" : "☾ Dark Terminal"}
+        </button>
       </div>
 
-      <header style={{ background: "#ffffff", borderBottom: "1px solid #e2e8f0", padding: "12px 24px" }}>
+      {/* Primary Navigation Header */}
+      <header style={{ background: theme.headerBg, borderBottom: `1px solid ${theme.border}`, padding: "12px 24px" }}>
         <div style={{ maxWidth: "1280px", margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "24px" }}>
           <ValoqLogo />
 
@@ -389,7 +475,9 @@ export default function Home() {
                 width: "100%",
                 padding: "10px 14px",
                 borderRadius: "8px",
-                border: "1px solid #cbd5e1",
+                border: `1px solid ${theme.border}`,
+                background: darkMode ? "#1a2234" : "#ffffff",
+                color: theme.text,
                 fontSize: "0.9rem",
                 outline: "none"
               }}
@@ -401,10 +489,10 @@ export default function Home() {
                 top: "105%",
                 left: 0,
                 right: 0,
-                background: "#ffffff",
-                border: "1px solid #e2e8f0",
+                background: theme.cardBg,
+                border: `1px solid ${theme.border}`,
                 borderRadius: "8px",
-                boxShadow: "0 10px 15px -3px rgba(0,0,0,0.1)",
+                boxShadow: "0 10px 15px -3px rgba(0,0,0,0.3)",
                 zIndex: 50,
                 overflow: "hidden"
               }}>
@@ -418,16 +506,16 @@ export default function Home() {
                       display: "flex",
                       justifyContent: "space-between",
                       alignItems: "center",
-                      borderBottom: "1px solid #f8fafc"
+                      borderBottom: `1px solid ${theme.border}`
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "#f1f5f9")}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "#ffffff")}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = darkMode ? "#1f293d" : "#f1f5f9")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                   >
                     <div>
-                      <strong style={{ fontSize: "0.85rem", color: "#0f172a" }}>{item.symbol}</strong>
-                      <span style={{ fontSize: "0.8rem", color: "#64748b", marginLeft: "8px" }}>{item.name}</span>
+                      <strong style={{ fontSize: "0.85rem", color: theme.text }}>{item.symbol}</strong>
+                      <span style={{ fontSize: "0.8rem", color: theme.textSub, marginLeft: "8px" }}>{item.name}</span>
                     </div>
-                    <span style={{ fontSize: "0.68rem", fontWeight: 700, background: "#f1f5f9", padding: "2px 6px", borderRadius: "4px", color: "#475569" }}>
+                    <span style={{ fontSize: "0.68rem", fontWeight: 700, background: darkMode ? "#1f293d" : "#f1f5f9", padding: "2px 6px", borderRadius: "4px", color: theme.textSub }}>
                       {item.exchange}
                     </span>
                   </div>
@@ -462,9 +550,9 @@ export default function Home() {
             <button
               onClick={() => setShowWatchlistDrawer(!showWatchlistDrawer)}
               style={{
-                background: "#f1f5f9",
-                color: "#0f172a",
-                border: "1px solid #cbd5e1",
+                background: darkMode ? "#1f293d" : "#f1f5f9",
+                color: theme.text,
+                border: `1px solid ${theme.border}`,
                 padding: "8px 14px",
                 borderRadius: "6px",
                 fontSize: "0.78rem",
@@ -475,7 +563,7 @@ export default function Home() {
               ★ Watchlist ({watchlist.length})
             </button>
 
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.78rem", fontWeight: 600, color: "#334155" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.78rem", fontWeight: 600, color: theme.textSub }}>
               <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#00d09c", boxShadow: "0 0 8px #00d09c" }} />
               <span>US OPEN</span>
             </div>
@@ -485,7 +573,7 @@ export default function Home() {
 
       <main style={{ maxWidth: "1280px", margin: "0 auto", padding: "24px" }}>
         {loading && !data ? (
-          <div style={{ padding: "60px", textAlign: "center", color: "#64748b" }}>
+          <div style={{ padding: "60px", textAlign: "center", color: theme.textSub }}>
             Loading market telemetry for <strong>{ticker}</strong>...
           </div>
         ) : errorMsg ? (
@@ -495,17 +583,17 @@ export default function Home() {
         ) : data && (
           <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: "20px" }}>
             <div>
-              <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "18px", marginBottom: "16px" }}>
+              <div style={{ background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: "12px", padding: "18px", marginBottom: "16px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                   <div>
-                    <div style={{ fontSize: "0.8rem", color: "#64748b", fontWeight: 700 }}>{data.company_name}</div>
-                    <div style={{ fontSize: "0.72rem", color: "#94a3b8", marginBottom: "6px" }}>{data.symbol} • {data.exchange}</div>
+                    <div style={{ fontSize: "0.8rem", color: theme.textSub, fontWeight: 700 }}>{data.company_name}</div>
+                    <div style={{ fontSize: "0.72rem", color: theme.textSub, marginBottom: "6px" }}>{data.symbol} • {data.exchange}</div>
                   </div>
                   <button
                     onClick={togglePinWatchlist}
                     style={{
-                      background: isCurrentPinned ? "#e6fbf5" : "#f1f5f9",
-                      color: isCurrentPinned ? "#00d09c" : "#64748b",
+                      background: isCurrentPinned ? "rgba(0, 208, 156, 0.15)" : (darkMode ? "#1f293d" : "#f1f5f9"),
+                      color: isCurrentPinned ? "#00d09c" : theme.textSub,
                       border: "none",
                       padding: "4px 8px",
                       borderRadius: "6px",
@@ -518,26 +606,26 @@ export default function Home() {
                   </button>
                 </div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
-                  <span style={{ fontSize: "1.8rem", fontWeight: 800 }}>{data.currency}{data.price.toFixed(2)}</span>
+                  <span style={{ fontSize: "1.8rem", fontWeight: 800, color: theme.text }}>{data.currency}{data.price.toFixed(2)}</span>
                   <span style={{ color: data.change >= 0 ? "#00d09c" : "#eb5757", fontWeight: 700 }}>
                     {data.change >= 0 ? "+" : ""}{data.change_pct}%
                   </span>
                 </div>
               </div>
 
-              <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "18px" }}>
-                <h3 style={{ margin: "0 0 14px 0", fontSize: "1rem" }}>{data.symbol} Investment Scorecard</h3>
+              <div style={{ background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: "12px", padding: "18px" }}>
+                <h3 style={{ margin: "0 0 14px 0", fontSize: "1rem", color: theme.text }}>{data.symbol} Investment Scorecard</h3>
                 {data.scorecard && Object.entries(data.scorecard).map(([k, v]) => (
                   <div
                     key={k}
                     onClick={() => setExpandedFactor(expandedFactor === k ? null : k)}
-                    style={{ padding: "10px 0", borderBottom: "1px solid #f1f5f9", cursor: "pointer" }}
+                    style={{ padding: "10px 0", borderBottom: `1px solid ${theme.border}`, cursor: "pointer" }}
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <strong style={{ textTransform: "capitalize", fontSize: "0.85rem" }}>{k.replace("_", " ")}</strong>
+                      <strong style={{ textTransform: "capitalize", fontSize: "0.85rem", color: theme.text }}>{k.replace("_", " ")}</strong>
                       <span style={{
-                        background: v.tag === "High" || v.tag === "Good" ? "#e6fbf5" : "#fff1f2",
-                        color: v.tag === "High" || v.tag === "Good" ? "#00d09c" : "#e11d48",
+                        background: v.tag === "High" || v.tag === "Good" ? "rgba(0, 208, 156, 0.15)" : "rgba(235, 87, 87, 0.15)",
+                        color: v.tag === "High" || v.tag === "Good" ? "#00d09c" : "#eb5757",
                         padding: "2px 6px",
                         borderRadius: "4px",
                         fontSize: "0.7rem",
@@ -546,10 +634,10 @@ export default function Home() {
                         {v.tag}
                       </span>
                     </div>
-                    <div style={{ fontSize: "0.75rem", color: "#64748b", marginTop: "3px" }}>{v.desc}</div>
+                    <div style={{ fontSize: "0.75rem", color: theme.textSub, marginTop: "3px" }}>{v.desc}</div>
                     
                     {expandedFactor === k && (
-                      <div style={{ background: "#f8fafc", borderRadius: "6px", padding: "8px 10px", marginTop: "8px", fontSize: "0.72rem", color: "#0f172a", border: "1px solid #e2e8f0" }}>
+                      <div style={{ background: theme.cardSub, borderRadius: "6px", padding: "8px 10px", marginTop: "8px", fontSize: "0.72rem", color: theme.text, border: `1px solid ${theme.border}` }}>
                         <strong>Diagnostic Telemetry:</strong> {v.metrics}
                       </div>
                     )}
@@ -559,7 +647,8 @@ export default function Home() {
             </div>
 
             <div>
-              <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "18px", marginBottom: "20px" }}>
+              {/* Main Candlestick Panel */}
+              <div style={{ background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: "12px", padding: "18px", marginBottom: "20px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px", flexWrap: "wrap", gap: "10px" }}>
                   <div style={{ display: "flex", gap: "4px" }}>
                     {["1d", "5d", "1mo", "1y", "5y", "max"].map((tf) => (
@@ -567,8 +656,8 @@ export default function Home() {
                         key={tf}
                         onClick={() => setTimeframe(tf)}
                         style={{
-                          background: timeframe === tf ? "#0f172a" : "#f1f5f9",
-                          color: timeframe === tf ? "#fff" : "#475569",
+                          background: timeframe === tf ? "#00d09c" : (darkMode ? "#1f293d" : "#f1f5f9"),
+                          color: timeframe === tf ? "#090d14" : theme.textSub,
                           border: "none",
                           padding: "5px 10px",
                           borderRadius: "6px",
@@ -586,9 +675,9 @@ export default function Home() {
                     <button
                       onClick={() => setShowEMA50(!showEMA50)}
                       style={{
-                        background: showEMA50 ? "#dbeafe" : "#f1f5f9",
-                        color: showEMA50 ? "#1d4ed8" : "#64748b",
-                        border: showEMA50 ? "1px solid #93c5fd" : "1px solid transparent",
+                        background: showEMA50 ? "rgba(59, 130, 246, 0.2)" : (darkMode ? "#1f293d" : "#f1f5f9"),
+                        color: showEMA50 ? "#3b82f6" : theme.textSub,
+                        border: showEMA50 ? "1px solid #3b82f6" : "1px solid transparent",
                         padding: "5px 10px",
                         borderRadius: "6px",
                         fontSize: "0.72rem",
@@ -602,9 +691,9 @@ export default function Home() {
                     <button
                       onClick={() => setShowSMA200(!showSMA200)}
                       style={{
-                        background: showSMA200 ? "#fef3c7" : "#f1f5f9",
-                        color: showSMA200 ? "#b45309" : "#64748b",
-                        border: showSMA200 ? "1px solid #fde68a" : "1px solid transparent",
+                        background: showSMA200 ? "rgba(245, 158, 11, 0.2)" : (darkMode ? "#1f293d" : "#f1f5f9"),
+                        color: showSMA200 ? "#f59e0b" : theme.textSub,
+                        border: showSMA200 ? "1px solid #f59e0b" : "1px solid transparent",
                         padding: "5px 10px",
                         borderRadius: "6px",
                         fontSize: "0.72rem",
@@ -618,9 +707,9 @@ export default function Home() {
                     <button
                       onClick={() => setShowRSI(!showRSI)}
                       style={{
-                        background: showRSI ? "#ede9fe" : "#f1f5f9",
-                        color: showRSI ? "#6d28d9" : "#64748b",
-                        border: showRSI ? "1px solid #c4b5fd" : "1px solid transparent",
+                        background: showRSI ? "rgba(168, 85, 247, 0.2)" : (darkMode ? "#1f293d" : "#f1f5f9"),
+                        color: showRSI ? "#a855f7" : theme.textSub,
+                        border: showRSI ? "1px solid #a855f7" : "1px solid transparent",
                         padding: "5px 10px",
                         borderRadius: "6px",
                         fontSize: "0.72rem",
@@ -631,12 +720,12 @@ export default function Home() {
                       ● RSI (14)
                     </button>
 
-                    <div style={{ display: "flex", gap: "4px", background: "#f1f5f9", padding: "3px", borderRadius: "8px" }}>
+                    <div style={{ display: "flex", gap: "4px", background: darkMode ? "#1f293d" : "#f1f5f9", padding: "3px", borderRadius: "8px" }}>
                       <button
                         onClick={() => setChartType("area")}
                         style={{
-                          background: chartType === "area" ? "#ffffff" : "transparent",
-                          color: chartType === "area" ? "#0f172a" : "#64748b",
+                          background: chartType === "area" ? (darkMode ? "#0f172a" : "#ffffff") : "transparent",
+                          color: chartType === "area" ? theme.text : theme.textSub,
                           border: "none",
                           padding: "5px 10px",
                           borderRadius: "6px",
@@ -650,8 +739,8 @@ export default function Home() {
                       <button
                         onClick={() => setChartType("candles")}
                         style={{
-                          background: chartType === "candles" ? "#ffffff" : "transparent",
-                          color: chartType === "candles" ? "#00d09c" : "#64748b",
+                          background: chartType === "candles" ? (darkMode ? "#0f172a" : "#ffffff") : "transparent",
+                          color: chartType === "candles" ? "#00d09c" : theme.textSub,
                           border: "none",
                           padding: "5px 10px",
                           borderRadius: "6px",
@@ -669,9 +758,9 @@ export default function Home() {
                 <div ref={mainChartContainerRef} style={{ width: "100%", height: "320px" }} />
 
                 {showRSI && (
-                  <div style={{ marginTop: "12px", borderTop: "1px solid #f1f5f9", paddingTop: "8px" }}>
-                    <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#64748b", marginBottom: "4px", display: "flex", justifyContent: "space-between" }}>
-                      <span>RSI(14) OSCILLATOR</span>
+                  <div style={{ marginTop: "12px", borderTop: `1px solid ${theme.border}`, paddingTop: "8px" }}>
+                    <div style={{ fontSize: "0.72rem", fontWeight: 700, color: theme.textSub, marginBottom: "4px", display: "flex", justifyContent: "space-between" }}>
+                      <span>RSI(14) MOMENTUM OSCILLATOR</span>
                       <span>
                         <span style={{ color: "#ef4444" }}>70 Overbought</span> • <span style={{ color: "#10b981" }}>30 Oversold</span>
                       </span>
@@ -681,14 +770,16 @@ export default function Home() {
                 )}
               </div>
 
-              <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "18px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #f1f5f9", paddingBottom: "12px", marginBottom: "16px" }}>
-                  <div style={{ display: "flex", gap: "24px" }}>
+              {/* Multi-Tab Analytics Workspace */}
+              <div style={{ background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: "12px", padding: "18px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${theme.border}`, paddingBottom: "12px", marginBottom: "16px", flexWrap: "wrap", gap: "10px" }}>
+                  <div style={{ display: "flex", gap: "20px" }}>
                     {[
                       { id: "dcf", label: "⚡ DCF Intrinsic Valuation" },
+                      { id: "compare", label: "⚖ Side-by-Side Matrix" },
                       { id: "overview", label: "Overview & Forecasts" },
                       { id: "financials", label: "Income & Cash Flows" },
-                      { id: "peers", label: "Sector Peers Comparison" }
+                      { id: "peers", label: "Sector Peers" }
                     ].map((tab) => (
                       <button
                         key={tab.id}
@@ -699,7 +790,7 @@ export default function Home() {
                           borderBottom: activeTab === tab.id ? "2px solid #00d09c" : "2px solid transparent",
                           paddingBottom: "8px",
                           fontWeight: activeTab === tab.id ? 800 : 600,
-                          color: activeTab === tab.id ? "#0f172a" : "#64748b",
+                          color: activeTab === tab.id ? theme.text : theme.textSub,
                           fontSize: "0.85rem",
                           cursor: "pointer"
                         }}
@@ -710,33 +801,51 @@ export default function Home() {
                   </div>
 
                   {activeTab === "dcf" && (
-                    <button
-                      onClick={exportDCFModelCSV}
-                      style={{
-                        background: "#0f172a",
-                        color: "#00f5a0",
-                        border: "none",
-                        padding: "6px 12px",
-                        borderRadius: "6px",
-                        fontSize: "0.75rem",
-                        fontWeight: 700,
-                        cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "6px"
-                      }}
-                    >
-                      📥 Export CSV Tear Sheet
-                    </button>
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <button
+                        onClick={() => setShowWaccModal(true)}
+                        style={{
+                          background: darkMode ? "#1e293b" : "#f1f5f9",
+                          color: "#38bdf8",
+                          border: `1px solid ${theme.border}`,
+                          padding: "6px 12px",
+                          borderRadius: "6px",
+                          fontSize: "0.75rem",
+                          fontWeight: 700,
+                          cursor: "pointer"
+                        }}
+                      >
+                        ⚙ Calculate WACC
+                      </button>
+                      <button
+                        onClick={exportDCFModelCSV}
+                        style={{
+                          background: "#0f172a",
+                          color: "#00f5a0",
+                          border: "none",
+                          padding: "6px 12px",
+                          borderRadius: "6px",
+                          fontSize: "0.75rem",
+                          fontWeight: 700,
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px"
+                        }}
+                      >
+                        📥 Export Tear Sheet
+                      </button>
+                    </div>
                   )}
                 </div>
 
+                {/* TAB 1: DCF INTRINSIC VALUATION */}
                 {activeTab === "dcf" && (
                   <div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "20px" }}>
-                      <div style={{ background: "#f8fafc", padding: "16px", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
-                        <span style={{ fontSize: "0.75rem", color: "#64748b", fontWeight: 700 }}>VALOQ INTRINSIC FAIR VALUE</span>
-                        <div style={{ fontSize: "2rem", fontWeight: 900, color: "#0f172a", marginTop: "4px" }}>
+                      <div style={{ background: theme.cardSub, padding: "16px", borderRadius: "10px", border: `1px solid ${theme.border}` }}>
+                        <span style={{ fontSize: "0.75rem", color: theme.textSub, fontWeight: 700 }}>VALOQ INTRINSIC FAIR VALUE</span>
+                        <div style={{ fontSize: "2rem", fontWeight: 900, color: theme.text, marginTop: "4px" }}>
                           ${dcfResult.fairValue}
                         </div>
                         <div style={{ fontSize: "0.8rem", color: dcfResult.marginOfSafety >= 0 ? "#00d09c" : "#eb5757", fontWeight: 700, marginTop: "4px" }}>
@@ -744,12 +853,12 @@ export default function Home() {
                         </div>
                       </div>
 
-                      <div style={{ background: "#f8fafc", padding: "16px", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
-                        <span style={{ fontSize: "0.75rem", color: "#64748b", fontWeight: 700 }}>CURRENT MARKET PRICE</span>
-                        <div style={{ fontSize: "2rem", fontWeight: 900, color: "#0f172a", marginTop: "4px" }}>
+                      <div style={{ background: theme.cardSub, padding: "16px", borderRadius: "10px", border: `1px solid ${theme.border}` }}>
+                        <span style={{ fontSize: "0.75rem", color: theme.textSub, fontWeight: 700 }}>CURRENT MARKET PRICE</span>
+                        <div style={{ fontSize: "2rem", fontWeight: 900, color: theme.text, marginTop: "4px" }}>
                           ${data.price.toFixed(2)}
                         </div>
-                        <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "4px" }}>
+                        <div style={{ fontSize: "0.8rem", color: theme.textSub, marginTop: "4px" }}>
                           5-Year Free Cash Flow Projections
                         </div>
                       </div>
@@ -759,7 +868,7 @@ export default function Home() {
                       <div>
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", marginBottom: "6px" }}>
                           <span><strong>Projected 5Y Revenue/FCF Growth:</strong> {growthRate}%</span>
-                          <span style={{ color: "#64748b" }}>Range: 4% to 25%</span>
+                          <span style={{ color: theme.textSub }}>Range: 4% to 25%</span>
                         </div>
                         <input
                           type="range"
@@ -775,13 +884,13 @@ export default function Home() {
                       <div>
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", marginBottom: "6px" }}>
                           <span><strong>Discount Rate (WACC):</strong> {discountRate}%</span>
-                          <span style={{ color: "#64748b" }}>Cost of Equity & Capital</span>
+                          <span style={{ color: theme.textSub }}>Cost of Equity & Capital</span>
                         </div>
                         <input
                           type="range"
-                          min="6"
-                          max="14"
-                          step="0.25"
+                          min="5"
+                          max="15"
+                          step="0.1"
                           value={discountRate}
                           onChange={(e) => setDiscountRate(parseFloat(e.target.value))}
                           style={{ width: "100%", accentColor: "#00d09c", cursor: "pointer" }}
@@ -791,7 +900,7 @@ export default function Home() {
                       <div>
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", marginBottom: "6px" }}>
                           <span><strong>Perpetual Terminal Growth Rate:</strong> {terminalGrowth}%</span>
-                          <span style={{ color: "#64748b" }}>Long-term GDP projection</span>
+                          <span style={{ color: theme.textSub }}>Long-term GDP projection</span>
                         </div>
                         <input
                           type="range"
@@ -807,49 +916,114 @@ export default function Home() {
                   </div>
                 )}
 
+                {/* TAB 2: SIDE-BY-SIDE MULTI-TICKER COMPARISON */}
+                {activeTab === "compare" && (
+                  <div>
+                    {comparisonLoading ? (
+                      <div style={{ textAlign: "center", padding: "40px", color: theme.textSub }}>
+                        Gathering real-time multi-ticker balance sheets & multiples...
+                      </div>
+                    ) : comparisonData.length === 0 ? (
+                      <div style={{ textAlign: "center", padding: "40px", color: theme.textSub }}>
+                        No watchlist items to benchmark. Click <strong>+ Pin</strong> to add equities.
+                      </div>
+                    ) : (
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", textAlign: "left", fontSize: "0.82rem", borderCollapse: "collapse" }}>
+                          <thead>
+                            <tr style={{ borderBottom: `1px solid ${theme.border}`, color: theme.textSub }}>
+                              <th style={{ padding: "10px 8px" }}>Asset</th>
+                              <th style={{ padding: "10px 8px", textAlign: "right" }}>Price</th>
+                              <th style={{ padding: "10px 8px", textAlign: "right" }}>P/E Multiple</th>
+                              <th style={{ padding: "10px 8px", textAlign: "right" }}>P/B Multiple</th>
+                              <th style={{ padding: "10px 8px", textAlign: "right" }}>Beta</th>
+                              <th style={{ padding: "10px 8px", textAlign: "right" }}>Div Yield</th>
+                              <th style={{ padding: "10px 8px", textAlign: "right" }}>1Y Forecast</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {comparisonData.map((item) => (
+                              <tr
+                                key={item.symbol}
+                                onClick={() => selectStock(item.symbol)}
+                                style={{ borderBottom: `1px solid ${theme.border}`, cursor: "pointer" }}
+                              >
+                                <td style={{ padding: "12px 8px" }}>
+                                  <strong style={{ color: theme.text }}>{item.symbol}</strong>
+                                  <div style={{ fontSize: "0.72rem", color: theme.textSub }}>{item.company_name}</div>
+                                </td>
+                                <td style={{ textAlign: "right", fontWeight: 700, color: theme.text }}>
+                                  ${item.price}
+                                </td>
+                                <td style={{ textAlign: "right", color: item.pe > 35 ? "#eb5757" : "#00d09c", fontWeight: 700 }}>
+                                  {item.pe}x
+                                </td>
+                                <td style={{ textAlign: "right", color: theme.text }}>
+                                  {item.pb}x
+                                </td>
+                                <td style={{ textAlign: "right", color: theme.text }}>
+                                  {item.beta}
+                                </td>
+                                <td style={{ textAlign: "right", color: theme.text }}>
+                                  {item.div_yield}%
+                                </td>
+                                <td style={{ textAlign: "right", color: "#00d09c", fontWeight: 700 }}>
+                                  +{item.forecast?.upside_pct}%
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* TAB 3: OVERVIEW & FORECASTS */}
                 {activeTab === "overview" && (
                   <div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "14px", marginBottom: "20px" }}>
                       <div>
                         <span style={{ fontSize: "1.4rem", fontWeight: 800, color: "#00d09c" }}>{data.forecast?.buy_pct}%</span>
-                        <span style={{ display: "block", fontSize: "0.75rem", color: "#64748b" }}>Wall Street Consensus Buy</span>
+                        <span style={{ display: "block", fontSize: "0.75rem", color: theme.textSub }}>Wall Street Consensus Buy</span>
                       </div>
                       <div>
-                        <span style={{ fontSize: "1.2rem", fontWeight: 800 }}>+{data.forecast?.upside_pct}%</span>
-                        <span style={{ display: "block", fontSize: "0.75rem", color: "#64748b" }}>1Y Target ({data.currency}{data.forecast?.target_price})</span>
+                        <span style={{ fontSize: "1.2rem", fontWeight: 800, color: theme.text }}>+{data.forecast?.upside_pct}%</span>
+                        <span style={{ display: "block", fontSize: "0.75rem", color: theme.textSub }}>1Y Target ({data.currency}{data.forecast?.target_price})</span>
                       </div>
                       <div>
-                        <span style={{ fontSize: "1.2rem", fontWeight: 800 }}>+{data.forecast?.earnings_growth}%</span>
-                        <span style={{ display: "block", fontSize: "0.75rem", color: "#64748b" }}>Projected EPS Growth</span>
+                        <span style={{ fontSize: "1.2rem", fontWeight: 800, color: theme.text }}>+{data.forecast?.earnings_growth}%</span>
+                        <span style={{ display: "block", fontSize: "0.75rem", color: theme.textSub }}>Projected EPS Growth</span>
                       </div>
                     </div>
 
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "10px", background: "#f8fafc", padding: "12px", borderRadius: "8px" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "10px", background: theme.cardSub, padding: "12px", borderRadius: "8px", border: `1px solid ${theme.border}` }}>
                       <div>
-                        <span style={{ fontSize: "0.68rem", color: "#64748b", display: "block" }}>P/E RATIO</span>
-                        <strong style={{ fontSize: "0.9rem" }}>{data.pe}x</strong>
+                        <span style={{ fontSize: "0.68rem", color: theme.textSub, display: "block" }}>P/E RATIO</span>
+                        <strong style={{ fontSize: "0.9rem", color: theme.text }}>{data.pe}x</strong>
                       </div>
                       <div>
-                        <span style={{ fontSize: "0.68rem", color: "#64748b", display: "block" }}>P/B RATIO</span>
-                        <strong style={{ fontSize: "0.9rem" }}>{data.pb}x</strong>
+                        <span style={{ fontSize: "0.68rem", color: theme.textSub, display: "block" }}>P/B RATIO</span>
+                        <strong style={{ fontSize: "0.9rem", color: theme.text }}>{data.pb}x</strong>
                       </div>
                       <div>
-                        <span style={{ fontSize: "0.68rem", color: "#64748b", display: "block" }}>DIVIDEND YIELD</span>
-                        <strong style={{ fontSize: "0.9rem" }}>{data.div_yield}%</strong>
+                        <span style={{ fontSize: "0.68rem", color: theme.textSub, display: "block" }}>DIVIDEND YIELD</span>
+                        <strong style={{ fontSize: "0.9rem", color: theme.text }}>{data.div_yield}%</strong>
                       </div>
                       <div>
-                        <span style={{ fontSize: "0.68rem", color: "#64748b", display: "block" }}>BETA</span>
-                        <strong style={{ fontSize: "0.9rem" }}>{data.beta}</strong>
+                        <span style={{ fontSize: "0.68rem", color: theme.textSub, display: "block" }}>BETA</span>
+                        <strong style={{ fontSize: "0.9rem", color: theme.text }}>{data.beta}</strong>
                       </div>
                     </div>
                   </div>
                 )}
 
+                {/* TAB 4: FINANCIALS */}
                 {activeTab === "financials" && data.financials && (
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", textAlign: "left", fontSize: "0.82rem", borderCollapse: "collapse" }}>
                       <thead>
-                        <tr style={{ borderBottom: "1px solid #e2e8f0", color: "#64748b" }}>
+                        <tr style={{ borderBottom: `1px solid ${theme.border}`, color: theme.textSub }}>
                           <th style={{ padding: "8px 0" }}>Financial Metric ($ Billions)</th>
                           {data.financials.years.map(y => (
                             <th key={y} style={{ textAlign: "right", padding: "8px 0" }}>{y}</th>
@@ -857,16 +1031,16 @@ export default function Home() {
                         </tr>
                       </thead>
                       <tbody>
-                        <tr style={{ borderBottom: "1px solid #f8fafc" }}>
-                          <td style={{ padding: "10px 0", fontWeight: 600 }}>Total Revenue</td>
+                        <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
+                          <td style={{ padding: "10px 0", fontWeight: 600, color: theme.text }}>Total Revenue</td>
                           {data.financials.revenue.map((v, i) => (
-                            <td key={i} style={{ textAlign: "right", fontWeight: 700 }}>${v}B</td>
+                            <td key={i} style={{ textAlign: "right", fontWeight: 700, color: theme.text }}>${v}B</td>
                           ))}
                         </tr>
-                        <tr style={{ borderBottom: "1px solid #f8fafc" }}>
-                          <td style={{ padding: "10px 0", color: "#475569" }}>Operating Income (EBIT)</td>
+                        <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
+                          <td style={{ padding: "10px 0", color: theme.textSub }}>Operating Income (EBIT)</td>
                           {data.financials.operating_income.map((v, i) => (
-                            <td key={i} style={{ textAlign: "right" }}>${v}B</td>
+                            <td key={i} style={{ textAlign: "right", color: theme.text }}>${v}B</td>
                           ))}
                         </tr>
                         <tr>
@@ -880,11 +1054,12 @@ export default function Home() {
                   </div>
                 )}
 
+                {/* TAB 5: SECTOR PEERS */}
                 {activeTab === "peers" && data.peers && (
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", textAlign: "left", fontSize: "0.82rem", borderCollapse: "collapse" }}>
                       <thead>
-                        <tr style={{ borderBottom: "1px solid #e2e8f0", color: "#64748b" }}>
+                        <tr style={{ borderBottom: `1px solid ${theme.border}`, color: theme.textSub }}>
                           <th style={{ padding: "8px 0" }}>Company</th>
                           <th style={{ textAlign: "right", padding: "8px 0" }}>P/E</th>
                           <th style={{ textAlign: "right", padding: "8px 0" }}>P/B</th>
@@ -897,15 +1072,15 @@ export default function Home() {
                           <tr
                             key={peer.symbol}
                             onClick={() => selectStock(peer.symbol)}
-                            style={{ borderBottom: "1px solid #f8fafc", cursor: "pointer" }}
+                            style={{ borderBottom: `1px solid ${theme.border}`, cursor: "pointer" }}
                           >
                             <td style={{ padding: "10px 0" }}>
-                              <strong style={{ color: "#0f172a" }}>{peer.symbol}</strong>
-                              <span style={{ fontSize: "0.75rem", color: "#64748b", marginLeft: "6px" }}>{peer.name}</span>
+                              <strong style={{ color: theme.text }}>{peer.symbol}</strong>
+                              <span style={{ fontSize: "0.75rem", color: theme.textSub, marginLeft: "6px" }}>{peer.name}</span>
                             </td>
-                            <td style={{ textAlign: "right", fontWeight: 600 }}>{peer.pe}x</td>
-                            <td style={{ textAlign: "right" }}>{peer.pb}x</td>
-                            <td style={{ textAlign: "right" }}>{peer.market_cap}</td>
+                            <td style={{ textAlign: "right", fontWeight: 600, color: theme.text }}>{peer.pe}x</td>
+                            <td style={{ textAlign: "right", color: theme.text }}>{peer.pb}x</td>
+                            <td style={{ textAlign: "right", color: theme.text }}>{peer.market_cap}</td>
                             <td style={{ textAlign: "right", color: peer.change.startsWith("+") ? "#00d09c" : "#eb5757", fontWeight: 700 }}>
                               {peer.change}
                             </td>
@@ -922,7 +1097,160 @@ export default function Home() {
         )}
       </main>
 
-      {/* Persistent Watchlist Drawer with In-line PostgreSQL Editing */}
+      {/* Interactive WACC Calculator Modal */}
+      {showWaccModal && (
+        <div style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0,0,0,0.6)",
+          backdropFilter: "blur(4px)",
+          zIndex: 150,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "20px"
+        }}>
+          <div style={{
+            background: theme.cardBg,
+            border: `1px solid ${theme.border}`,
+            borderRadius: "14px",
+            width: "100%",
+            maxWidth: "520px",
+            padding: "24px",
+            boxShadow: "0 20px 25px -5px rgba(0,0,0,0.5)"
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+              <h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 800, color: theme.text }}>
+                ⚙ Capital Asset Pricing Model (CAPM) & WACC
+              </h3>
+              <button
+                onClick={() => setShowWaccModal(false)}
+                style={{ background: "none", border: "none", fontSize: "1.2rem", cursor: "pointer", color: theme.textSub }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ background: theme.cardSub, padding: "14px", borderRadius: "10px", border: `1px solid ${theme.border}`, marginBottom: "18px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <span style={{ fontSize: "0.75rem", color: theme.textSub, fontWeight: 700 }}>DERIVED DISCOUNT RATE (WACC)</span>
+                <div style={{ fontSize: "1.8rem", fontWeight: 900, color: "#38bdf8", marginTop: "2px" }}>
+                  {waccValues.wacc}%
+                </div>
+              </div>
+              <div style={{ textAlign: "right", fontSize: "0.75rem", color: theme.textSub }}>
+                <div>Cost of Equity: <strong style={{ color: theme.text }}>{waccValues.costOfEquity}%</strong></div>
+                <div>After-Tax Cost of Debt: <strong style={{ color: theme.text }}>{waccValues.afterTaxCostOfDebt}%</strong></div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px", fontSize: "0.8rem" }}>
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                  <span>Risk-Free Rate (10Y US Treasury):</span>
+                  <strong>{riskFreeRate}%</strong>
+                </div>
+                <input
+                  type="range"
+                  min="2"
+                  max="6"
+                  step="0.05"
+                  value={riskFreeRate}
+                  onChange={(e) => setRiskFreeRate(parseFloat(e.target.value))}
+                  style={{ width: "100%", accentColor: "#38bdf8" }}
+                />
+              </div>
+
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                  <span>Equity Risk Premium (ERP):</span>
+                  <strong>{equityRiskPremium}%</strong>
+                </div>
+                <input
+                  type="range"
+                  min="3"
+                  max="8"
+                  step="0.1"
+                  value={equityRiskPremium}
+                  onChange={(e) => setEquityRiskPremium(parseFloat(e.target.value))}
+                  style={{ width: "100%", accentColor: "#38bdf8" }}
+                />
+              </div>
+
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                  <span>Pre-Tax Cost of Debt:</span>
+                  <strong>{costOfDebt}%</strong>
+                </div>
+                <input
+                  type="range"
+                  min="2"
+                  max="9"
+                  step="0.1"
+                  value={costOfDebt}
+                  onChange={(e) => setCostOfDebt(parseFloat(e.target.value))}
+                  style={{ width: "100%", accentColor: "#38bdf8" }}
+                />
+              </div>
+
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                  <span>Equity Weight in Capital Structure:</span>
+                  <strong>{equityWeight}% (Debt: {100 - equityWeight}%)</strong>
+                </div>
+                <input
+                  type="range"
+                  min="50"
+                  max="100"
+                  step="1"
+                  value={equityWeight}
+                  onChange={(e) => setEquityWeight(parseFloat(e.target.value))}
+                  style={{ width: "100%", accentColor: "#38bdf8" }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>
+              <button
+                onClick={() => {
+                  setDiscountRate(waccValues.wacc);
+                  setShowWaccModal(false);
+                }}
+                style={{
+                  flex: 1,
+                  background: "#00d09c",
+                  color: "#090d14",
+                  border: "none",
+                  padding: "10px",
+                  borderRadius: "8px",
+                  fontSize: "0.85rem",
+                  fontWeight: 800,
+                  cursor: "pointer"
+                }}
+              >
+                Apply {waccValues.wacc}% to DCF Model
+              </button>
+              <button
+                onClick={() => setShowWaccModal(false)}
+                style={{
+                  background: darkMode ? "#1f293d" : "#f1f5f9",
+                  color: theme.text,
+                  border: `1px solid ${theme.border}`,
+                  padding: "10px 16px",
+                  borderRadius: "8px",
+                  fontSize: "0.85rem",
+                  fontWeight: 600,
+                  cursor: "pointer"
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Persistent Watchlist Drawer */}
       {showWatchlistDrawer && (
         <div style={{
           position: "fixed",
@@ -930,20 +1258,21 @@ export default function Home() {
           right: 0,
           bottom: 0,
           width: "400px",
-          background: "#ffffff",
-          boxShadow: "-8px 0 24px rgba(0,0,0,0.12)",
+          background: theme.cardBg,
+          boxShadow: "-8px 0 24px rgba(0,0,0,0.3)",
           zIndex: 100,
           display: "flex",
-          flexDirection: "column"
+          flexDirection: "column",
+          borderLeft: `1px solid ${theme.border}`
         }}>
-          <div style={{ padding: "18px 20px", borderBottom: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ padding: "18px 20px", borderBottom: `1px solid ${theme.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: "1rem", fontWeight: 800 }}>Pinned Watchlist</h3>
-              <span style={{ fontSize: "0.7rem", color: "#64748b" }}>Synced with Supabase PostgreSQL</span>
+              <h3 style={{ margin: 0, fontSize: "1rem", fontWeight: 800, color: theme.text }}>Pinned Watchlist</h3>
+              <span style={{ fontSize: "0.7rem", color: theme.textSub }}>Synced with Supabase PostgreSQL</span>
             </div>
             <button
               onClick={() => setShowWatchlistDrawer(false)}
-              style={{ background: "none", border: "none", fontSize: "1.2rem", cursor: "pointer", color: "#64748b" }}
+              style={{ background: "none", border: "none", fontSize: "1.2rem", cursor: "pointer", color: theme.textSub }}
             >
               ✕
             </button>
@@ -951,7 +1280,7 @@ export default function Home() {
 
           <div style={{ flex: 1, overflowY: "auto", padding: "14px 20px" }}>
             {watchlist.length === 0 ? (
-              <div style={{ color: "#94a3b8", textAlign: "center", marginTop: "40px", fontSize: "0.85rem" }}>
+              <div style={{ color: theme.textSub, textAlign: "center", marginTop: "40px", fontSize: "0.85rem" }}>
                 No pinned equities. Click <strong>+ Pin</strong> on any stock to save it.
               </div>
             ) : (
@@ -961,28 +1290,26 @@ export default function Home() {
                   style={{
                     padding: "14px",
                     borderRadius: "10px",
-                    border: "1px solid #e2e8f0",
+                    border: `1px solid ${theme.border}`,
                     marginBottom: "14px",
-                    background: "#ffffff",
-                    boxShadow: "0 1px 3px rgba(0,0,0,0.02)"
+                    background: theme.cardBg
                   }}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "8px" }}>
                     <div onClick={() => { selectStock(item.symbol); setShowWatchlistDrawer(false); }} style={{ cursor: "pointer" }}>
-                      <strong style={{ fontSize: "0.95rem", color: "#0f172a" }}>{item.symbol}</strong>
-                      <div style={{ fontSize: "0.74rem", color: "#64748b" }}>{item.company_name}</div>
+                      <strong style={{ fontSize: "0.95rem", color: theme.text }}>{item.symbol}</strong>
+                      <div style={{ fontSize: "0.74rem", color: theme.textSub }}>{item.company_name}</div>
                     </div>
                     <div style={{ textAlign: "right" }}>
-                      <div style={{ fontWeight: 800, fontSize: "0.9rem" }}>${item.current_price || "—"}</div>
+                      <div style={{ fontWeight: 800, fontSize: "0.9rem", color: theme.text }}>${item.current_price || "—"}</div>
                       <div style={{ fontSize: "0.72rem", color: item.change_pct >= 0 ? "#00d09c" : "#eb5757", fontWeight: 700 }}>
                         {item.change_pct >= 0 ? "+" : ""}{item.change_pct}%
                       </div>
                     </div>
                   </div>
 
-                  {/* Target Buy Price Editable Input */}
                   <div style={{ display: "flex", alignItems: "center", gap: "8px", margin: "8px 0" }}>
-                    <span style={{ fontSize: "0.72rem", color: "#64748b", width: "90px" }}>Target Buy ($):</span>
+                    <span style={{ fontSize: "0.72rem", color: theme.textSub, width: "90px" }}>Target Buy ($):</span>
                     <input
                       type="number"
                       placeholder="0.00"
@@ -994,12 +1321,13 @@ export default function Home() {
                         fontSize: "0.75rem",
                         padding: "4px 8px",
                         borderRadius: "4px",
-                        border: "1px solid #cbd5e1"
+                        border: `1px solid ${theme.border}`,
+                        background: darkMode ? "#1a2234" : "#ffffff",
+                        color: theme.text
                       }}
                     />
                   </div>
 
-                  {/* Notes Editable Input */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "6px" }}>
                     <input
                       type="text"
@@ -1012,8 +1340,9 @@ export default function Home() {
                         fontSize: "0.74rem",
                         padding: "6px 8px",
                         borderRadius: "4px",
-                        border: "1px solid #cbd5e1",
-                        background: "#f8fafc"
+                        border: `1px solid ${theme.border}`,
+                        background: darkMode ? "#1a2234" : "#f8fafc",
+                        color: theme.text
                       }}
                     />
                   </div>
