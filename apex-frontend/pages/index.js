@@ -17,13 +17,16 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
-  // Technical Overlays
+  // Technical Overlays & Oscillators
   const [showEMA50, setShowEMA50] = useState(true);
   const [showSMA200, setShowSMA200] = useState(true);
+  const [showRSI, setShowRSI] = useState(true);
 
   // Watchlist State
   const [watchlist, setWatchlist] = useState([]);
   const [showWatchlistDrawer, setShowWatchlistDrawer] = useState(false);
+  const [editingNotes, setEditingNotes] = useState({});
+  const [editingTarget, setEditingTarget] = useState({});
 
   // AI Drawer State
   const [showAIDrawer, setShowAIDrawer] = useState(false);
@@ -36,8 +39,10 @@ export default function Home() {
   const [discountRate, setDiscountRate] = useState(8.5);
   const [terminalGrowth, setTerminalGrowth] = useState(3.0);
 
-  const chartContainerRef = useRef(null);
-  const chartInstance = useRef(null);
+  const mainChartContainerRef = useRef(null);
+  const rsiChartContainerRef = useRef(null);
+  const mainChartInstance = useRef(null);
+  const rsiChartInstance = useRef(null);
 
   const fetchStock = async (sym, period) => {
     setLoading(true);
@@ -64,6 +69,23 @@ export default function Home() {
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const saveWatchlistEdits = async (sym) => {
+    const payload = {};
+    if (editingTarget[sym] !== undefined) payload.target_buy_price = parseFloat(editingTarget[sym]);
+    if (editingNotes[sym] !== undefined) payload.notes = editingNotes[sym];
+
+    try {
+      await fetch(`${API_BASE}/api/v1/watchlist/${sym}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      fetchWatchlist();
+    } catch (e) {
+      console.error("Failed to persist edits to Supabase", e);
     }
   };
 
@@ -115,32 +137,39 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [query]);
 
-  // Render TradingView Chart with EMA and SMA
+  // Main Chart + RSI Sub-panel Synchronized Setup
   useEffect(() => {
-    if (!data || !chartContainerRef.current || !data.candles || data.candles.length === 0) return;
+    if (!data || !mainChartContainerRef.current || !data.candles || data.candles.length === 0) return;
 
-    if (chartInstance.current) {
-      chartInstance.current.remove();
-      chartInstance.current = null;
+    if (mainChartInstance.current) {
+      mainChartInstance.current.remove();
+      mainChartInstance.current = null;
     }
-    chartContainerRef.current.innerHTML = "";
+    if (rsiChartInstance.current) {
+      rsiChartInstance.current.remove();
+      rsiChartInstance.current = null;
+    }
+    mainChartContainerRef.current.innerHTML = "";
+    if (rsiChartContainerRef.current) rsiChartContainerRef.current.innerHTML = "";
 
-    const chart = createChart(chartContainerRef.current, {
-      width: chartContainerRef.current.clientWidth,
-      height: 350,
+    const sortedCandles = [...data.candles]
+      .filter((v, i, a) => a.findIndex(t => t.time === v.time) === i)
+      .sort((a, b) => a.time - b.time);
+
+    // Main Canvas
+    const chart = createChart(mainChartContainerRef.current, {
+      width: mainChartContainerRef.current.clientWidth,
+      height: 320,
       layout: { background: { color: "#ffffff" }, textColor: "#64748b" },
       grid: { vertLines: { color: "#f8fafc" }, horzLines: { color: "#f8fafc" } },
       rightPriceScale: { borderColor: "#e2e8f0" },
       timeScale: { 
         borderColor: "#e2e8f0",
-        timeVisible: timeframe === "1d" || timeframe === "5d"
+        timeVisible: timeframe === "1d" || timeframe === "5d",
+        visible: !showRSI
       }
     });
-    chartInstance.current = chart;
-
-    const sortedCandles = [...data.candles]
-      .filter((v, i, a) => a.findIndex(t => t.time === v.time) === i)
-      .sort((a, b) => a.time - b.time);
+    mainChartInstance.current = chart;
 
     if (chartType === "area") {
       const areaSeries = chart.addAreaSeries({
@@ -168,35 +197,16 @@ export default function Home() {
       })));
     }
 
-    // Overlay EMA 50
     if (showEMA50) {
-      const emaSeries = chart.addLineSeries({
-        color: "#2563eb",
-        lineWidth: 2,
-        title: "EMA 50"
-      });
-      emaSeries.setData(
-        sortedCandles
-          .filter(c => c.ema50 !== null)
-          .map(c => ({ time: c.time, value: c.ema50 }))
-      );
+      const emaSeries = chart.addLineSeries({ color: "#2563eb", lineWidth: 2, title: "50 EMA" });
+      emaSeries.setData(sortedCandles.filter(c => c.ema50 !== null).map(c => ({ time: c.time, value: c.ema50 })));
     }
 
-    // Overlay SMA 200
     if (showSMA200) {
-      const smaSeries = chart.addLineSeries({
-        color: "#f59e0b",
-        lineWidth: 2,
-        title: "SMA 200"
-      });
-      smaSeries.setData(
-        sortedCandles
-          .filter(c => c.sma200 !== null)
-          .map(c => ({ time: c.time, value: c.sma200 }))
-      );
+      const smaSeries = chart.addLineSeries({ color: "#f59e0b", lineWidth: 2, title: "200 SMA" });
+      smaSeries.setData(sortedCandles.filter(c => c.sma200 !== null).map(c => ({ time: c.time, value: c.sma200 })));
     }
 
-    // Volume Series
     const volumeSeries = chart.addHistogramSeries({
       color: "#cbd5e1",
       priceFormat: { type: "volume" },
@@ -209,22 +219,65 @@ export default function Home() {
       color: c.close >= c.open ? "rgba(0, 208, 156, 0.35)" : "rgba(235, 87, 87, 0.35)"
     })));
 
+    // RSI Oscillator Panel
+    if (showRSI && rsiChartContainerRef.current) {
+      const rsiChart = createChart(rsiChartContainerRef.current, {
+        width: rsiChartContainerRef.current.clientWidth,
+        height: 120,
+        layout: { background: { color: "#ffffff" }, textColor: "#64748b" },
+        grid: { vertLines: { color: "#f8fafc" }, horzLines: { color: "#f8fafc" } },
+        rightPriceScale: { borderColor: "#e2e8f0", scaleMargins: { top: 0.1, bottom: 0.1 } },
+        timeScale: { 
+          borderColor: "#e2e8f0",
+          timeVisible: timeframe === "1d" || timeframe === "5d"
+        }
+      });
+      rsiChartInstance.current = rsiChart;
+
+      const rsiSeries = rsiChart.addLineSeries({
+        color: "#8b5cf6",
+        lineWidth: 2,
+        title: "RSI (14)"
+      });
+      rsiSeries.setData(sortedCandles.map(c => ({ time: c.time, value: c.rsi })));
+
+      // Overbought 70 and Oversold 30 threshold reference bands
+      const overboughtLine = rsiChart.addLineSeries({ color: "#ef4444", lineStyle: 2, lineWidth: 1 });
+      const oversoldLine = rsiChart.addLineSeries({ color: "#10b981", lineStyle: 2, lineWidth: 1 });
+      overboughtLine.setData(sortedCandles.map(c => ({ time: c.time, value: 70 })));
+      oversoldLine.setData(sortedCandles.map(c => ({ time: c.time, value: 30 })));
+
+      // Synchronize horizontal scrolling/zooming between charts
+      chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+        if (range) rsiChart.timeScale().setVisibleLogicalRange(range);
+      });
+      rsiChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+        if (range) chart.timeScale().setVisibleLogicalRange(range);
+      });
+
+      rsiChart.timeScale().fitContent();
+    }
+
     chart.timeScale().fitContent();
 
     const handleResize = () => {
-      if (chartInstance.current && chartContainerRef.current) {
-        chartInstance.current.applyOptions({ width: chartContainerRef.current.clientWidth });
-      }
+      const w = mainChartContainerRef.current ? mainChartContainerRef.current.clientWidth : 0;
+      if (mainChartInstance.current && w) mainChartInstance.current.applyOptions({ width: w });
+      if (rsiChartInstance.current && w) rsiChartInstance.current.applyOptions({ width: w });
     };
     window.addEventListener("resize", handleResize);
     return () => {
       window.removeEventListener("resize", handleResize);
-      if (chartInstance.current) {
-        chartInstance.current.remove();
-        chartInstance.current = null;
+      if (mainChartInstance.current) {
+        mainChartInstance.current.remove();
+        mainChartInstance.current = null;
+      }
+      if (rsiChartInstance.current) {
+        rsiChartInstance.current.remove();
+        rsiChartInstance.current = null;
       }
     };
-  }, [data, chartType, showEMA50, showSMA200]);
+  }, [data, chartType, showEMA50, showSMA200, showRSI]);
 
   const togglePinWatchlist = async () => {
     if (!data) return;
@@ -244,14 +297,14 @@ export default function Home() {
   };
 
   const calculateDCF = () => {
-    if (!data) return { fairValue: 0, marginOfSafety: 0 };
+    if (!data) return { fairValue: 0, marginOfSafety: 0, enterpriseValue: 0, pvFutureFCF: 0, pvTerminalValue: 0 };
     const baseFCF = 105.0;
     const g = growthRate / 100;
     const r = discountRate / 100;
     const tg = terminalGrowth / 100;
     const sharesOutstanding = 15.3;
 
-    if (r <= tg) return { fairValue: 0, marginOfSafety: 0 };
+    if (r <= tg) return { fairValue: 0, marginOfSafety: 0, enterpriseValue: 0, pvFutureFCF: 0, pvTerminalValue: 0 };
 
     let pvFutureFCF = 0;
     let currentFCF = baseFCF;
@@ -268,8 +321,45 @@ export default function Home() {
 
     return {
       fairValue: Math.round(fairValue * 100) / 100,
-      marginOfSafety: Math.round(marginOfSafety * 10) / 10
+      marginOfSafety: Math.round(marginOfSafety * 10) / 10,
+      enterpriseValue: Math.round(enterpriseValue * 10) / 10,
+      pvFutureFCF: Math.round(pvFutureFCF * 10) / 10,
+      pvTerminalValue: Math.round(pvTerminalValue * 10) / 10
     };
+  };
+
+  const exportDCFModelCSV = () => {
+    if (!data) return;
+    const dcf = calculateDCF();
+    const rows = [
+      ["Valoq Valuation Terminal - DCF Intrinsic Model Tear Sheet"],
+      ["Generated", new Date().toISOString()],
+      ["Symbol", data.symbol],
+      ["Company Name", data.company_name],
+      ["Exchange", data.exchange],
+      ["Current Price", data.price],
+      [],
+      ["Key DCF Assumptions", "Value"],
+      ["5Y Projected Revenue/FCF Growth", `${growthRate}%`],
+      ["Discount Rate (WACC)", `${discountRate}%`],
+      ["Perpetual Terminal Growth Rate", `${terminalGrowth}%`],
+      [],
+      ["Valuation Output", "Amount"],
+      ["Present Value of 5Y Cash Flows ($B)", `$${dcf.pvFutureFCF}B`],
+      ["Present Value of Terminal Value ($B)", `$${dcf.pvTerminalValue}B`],
+      ["Estimated Enterprise Value ($B)", `$${dcf.enterpriseValue}B`],
+      ["Intrinsic Fair Value Per Share", `$${dcf.fairValue}`],
+      ["Implied Upside / Downside", `${dcf.marginOfSafety}%`]
+    ];
+
+    const csvContent = "data:text/csv;charset=utf-8," + rows.map(e => e.join(",")).join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `Valoq_DCF_${data.symbol}_${new Date().toISOString().split("T")[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const dcfResult = calculateDCF();
@@ -291,7 +381,7 @@ export default function Home() {
           <div style={{ position: "relative", flex: 1, maxWidth: "480px" }}>
             <input
               type="text"
-              placeholder="Search US or Global Equities (e.g. AAPL, NVDA, WABAG, TSLA)..."
+              placeholder="Search US or Global Equities (e.g. AAPL, NVDA, TSLA)..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onFocus={() => suggestions.length > 0 && setShowDropdown(true)}
@@ -492,7 +582,6 @@ export default function Home() {
                     ))}
                   </div>
 
-                  {/* Technical Overlays & Style Controls */}
                   <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                     <button
                       onClick={() => setShowEMA50(!showEMA50)}
@@ -524,6 +613,22 @@ export default function Home() {
                       }}
                     >
                       ● 200 SMA
+                    </button>
+
+                    <button
+                      onClick={() => setShowRSI(!showRSI)}
+                      style={{
+                        background: showRSI ? "#ede9fe" : "#f1f5f9",
+                        color: showRSI ? "#6d28d9" : "#64748b",
+                        border: showRSI ? "1px solid #c4b5fd" : "1px solid transparent",
+                        padding: "5px 10px",
+                        borderRadius: "6px",
+                        fontSize: "0.72rem",
+                        fontWeight: 700,
+                        cursor: "pointer"
+                      }}
+                    >
+                      ● RSI (14)
                     </button>
 
                     <div style={{ display: "flex", gap: "4px", background: "#f1f5f9", padding: "3px", borderRadius: "8px" }}>
@@ -561,34 +666,69 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div ref={chartContainerRef} style={{ width: "100%", height: "350px" }} />
+                <div ref={mainChartContainerRef} style={{ width: "100%", height: "320px" }} />
+
+                {showRSI && (
+                  <div style={{ marginTop: "12px", borderTop: "1px solid #f1f5f9", paddingTop: "8px" }}>
+                    <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "#64748b", marginBottom: "4px", display: "flex", justifyContent: "space-between" }}>
+                      <span>RSI(14) OSCILLATOR</span>
+                      <span>
+                        <span style={{ color: "#ef4444" }}>70 Overbought</span> • <span style={{ color: "#10b981" }}>30 Oversold</span>
+                      </span>
+                    </div>
+                    <div ref={rsiChartContainerRef} style={{ width: "100%", height: "120px" }} />
+                  </div>
+                )}
               </div>
 
               <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "18px" }}>
-                <div style={{ display: "flex", gap: "24px", borderBottom: "1px solid #f1f5f9", paddingBottom: "12px", marginBottom: "16px" }}>
-                  {[
-                    { id: "dcf", label: "⚡ DCF Intrinsic Valuation" },
-                    { id: "overview", label: "Overview & Forecasts" },
-                    { id: "financials", label: "Income & Cash Flows" },
-                    { id: "peers", label: "Sector Peers Comparison" }
-                  ].map((tab) => (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #f1f5f9", paddingBottom: "12px", marginBottom: "16px" }}>
+                  <div style={{ display: "flex", gap: "24px" }}>
+                    {[
+                      { id: "dcf", label: "⚡ DCF Intrinsic Valuation" },
+                      { id: "overview", label: "Overview & Forecasts" },
+                      { id: "financials", label: "Income & Cash Flows" },
+                      { id: "peers", label: "Sector Peers Comparison" }
+                    ].map((tab) => (
+                      <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          borderBottom: activeTab === tab.id ? "2px solid #00d09c" : "2px solid transparent",
+                          paddingBottom: "8px",
+                          fontWeight: activeTab === tab.id ? 800 : 600,
+                          color: activeTab === tab.id ? "#0f172a" : "#64748b",
+                          fontSize: "0.85rem",
+                          cursor: "pointer"
+                        }}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {activeTab === "dcf" && (
                     <button
-                      key={tab.id}
-                      onClick={() => setActiveTab(tab.id)}
+                      onClick={exportDCFModelCSV}
                       style={{
-                        background: "none",
+                        background: "#0f172a",
+                        color: "#00f5a0",
                         border: "none",
-                        borderBottom: activeTab === tab.id ? "2px solid #00d09c" : "2px solid transparent",
-                        paddingBottom: "8px",
-                        fontWeight: activeTab === tab.id ? 800 : 600,
-                        color: activeTab === tab.id ? "#0f172a" : "#64748b",
-                        fontSize: "0.85rem",
-                        cursor: "pointer"
+                        padding: "6px 12px",
+                        borderRadius: "6px",
+                        fontSize: "0.75rem",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px"
                       }}
                     >
-                      {tab.label}
+                      📥 Export CSV Tear Sheet
                     </button>
-                  ))}
+                  )}
                 </div>
 
                 {activeTab === "dcf" && (
@@ -782,13 +922,14 @@ export default function Home() {
         )}
       </main>
 
+      {/* Persistent Watchlist Drawer with In-line PostgreSQL Editing */}
       {showWatchlistDrawer && (
         <div style={{
           position: "fixed",
           top: 0,
           right: 0,
           bottom: 0,
-          width: "360px",
+          width: "400px",
           background: "#ffffff",
           boxShadow: "-8px 0 24px rgba(0,0,0,0.12)",
           zIndex: 100,
@@ -796,7 +937,10 @@ export default function Home() {
           flexDirection: "column"
         }}>
           <div style={{ padding: "18px 20px", borderBottom: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h3 style={{ margin: 0, fontSize: "1rem", fontWeight: 800 }}>Pinned Watchlist</h3>
+            <div>
+              <h3 style={{ margin: 0, fontSize: "1rem", fontWeight: 800 }}>Pinned Watchlist</h3>
+              <span style={{ fontSize: "0.7rem", color: "#64748b" }}>Synced with Supabase PostgreSQL</span>
+            </div>
             <button
               onClick={() => setShowWatchlistDrawer(false)}
               style={{ background: "none", border: "none", fontSize: "1.2rem", cursor: "pointer", color: "#64748b" }}
@@ -814,32 +958,64 @@ export default function Home() {
               watchlist.map((item) => (
                 <div
                   key={item.symbol}
-                  onClick={() => {
-                    selectStock(item.symbol);
-                    setShowWatchlistDrawer(false);
-                  }}
                   style={{
-                    padding: "12px 14px",
-                    borderRadius: "8px",
+                    padding: "14px",
+                    borderRadius: "10px",
                     border: "1px solid #e2e8f0",
-                    marginBottom: "10px",
-                    cursor: "pointer",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center"
+                    marginBottom: "14px",
+                    background: "#ffffff",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.02)"
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "#ffffff")}
                 >
-                  <div>
-                    <strong style={{ fontSize: "0.9rem", color: "#0f172a" }}>{item.symbol}</strong>
-                    <div style={{ fontSize: "0.72rem", color: "#64748b" }}>{item.company_name}</div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontWeight: 800, fontSize: "0.85rem" }}>${item.current_price || "—"}</div>
-                    <div style={{ fontSize: "0.72rem", color: item.change_pct >= 0 ? "#00d09c" : "#eb5757", fontWeight: 700 }}>
-                      {item.change_pct >= 0 ? "+" : ""}{item.change_pct}%
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "8px" }}>
+                    <div onClick={() => { selectStock(item.symbol); setShowWatchlistDrawer(false); }} style={{ cursor: "pointer" }}>
+                      <strong style={{ fontSize: "0.95rem", color: "#0f172a" }}>{item.symbol}</strong>
+                      <div style={{ fontSize: "0.74rem", color: "#64748b" }}>{item.company_name}</div>
                     </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontWeight: 800, fontSize: "0.9rem" }}>${item.current_price || "—"}</div>
+                      <div style={{ fontSize: "0.72rem", color: item.change_pct >= 0 ? "#00d09c" : "#eb5757", fontWeight: 700 }}>
+                        {item.change_pct >= 0 ? "+" : ""}{item.change_pct}%
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Target Buy Price Editable Input */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", margin: "8px 0" }}>
+                    <span style={{ fontSize: "0.72rem", color: "#64748b", width: "90px" }}>Target Buy ($):</span>
+                    <input
+                      type="number"
+                      placeholder="0.00"
+                      value={editingTarget[item.symbol] !== undefined ? editingTarget[item.symbol] : (item.target_buy_price || "")}
+                      onChange={(e) => setEditingTarget({ ...editingTarget, [item.symbol]: e.target.value })}
+                      onBlur={() => saveWatchlistEdits(item.symbol)}
+                      style={{
+                        flex: 1,
+                        fontSize: "0.75rem",
+                        padding: "4px 8px",
+                        borderRadius: "4px",
+                        border: "1px solid #cbd5e1"
+                      }}
+                    />
+                  </div>
+
+                  {/* Notes Editable Input */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "6px" }}>
+                    <input
+                      type="text"
+                      placeholder="Add research / entry thesis notes..."
+                      value={editingNotes[item.symbol] !== undefined ? editingNotes[item.symbol] : (item.notes || "")}
+                      onChange={(e) => setEditingNotes({ ...editingNotes, [item.symbol]: e.target.value })}
+                      onBlur={() => saveWatchlistEdits(item.symbol)}
+                      style={{
+                        width: "100%",
+                        fontSize: "0.74rem",
+                        padding: "6px 8px",
+                        borderRadius: "4px",
+                        border: "1px solid #cbd5e1",
+                        background: "#f8fafc"
+                      }}
+                    />
                   </div>
                 </div>
               ))
@@ -848,6 +1024,7 @@ export default function Home() {
         </div>
       )}
 
+      {/* Valoq AI Drawer */}
       {showAIDrawer && (
         <div style={{
           position: "fixed",

@@ -1,10 +1,12 @@
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import os
+import uuid
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, String, Numeric, Text, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -12,7 +14,7 @@ from datetime import datetime
 
 load_dotenv()
 
-app = FastAPI(title="Valoq Valuation Terminal Engine", version="3.3.0")
+app = FastAPI(title="Valoq Valuation Terminal Engine", version="3.4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,38 +32,60 @@ Base = declarative_base()
 
 class WatchlistModel(Base):
     __tablename__ = "watchlist"
-    symbol = Column(String(20), primary_key=True)
+    id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    symbol = Column(String(20), nullable=False)
     company_name = Column(String(255), nullable=False)
     exchange = Column(String(20), default="NASDAQ")
     target_buy_price = Column(Numeric(10, 2), nullable=True)
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
 
 if DATABASE_URL:
     try:
-        # Standardize postgres dialect for SQLAlchemy
-        if DATABASE_URL.startswith("postgres://"):
-            DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-        engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+        url = DATABASE_URL
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+psycopg2://", 1)
+        elif url.startswith("postgresql://") and "+psycopg2" not in url:
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+        engine = create_engine(
+            url,
+            pool_pre_ping=True,
+            connect_args={"connect_timeout": 10, "sslmode": "require"}
+        )
         SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-        Base.metadata.create_all(bind=engine)
+        with engine.connect() as conn:
+            print("Successfully connected to Supabase PostgreSQL!")
     except Exception as e:
-        print(f"Warning: PostgreSQL connection failed: {e}")
+        print(f"PostgreSQL connection failed: {e}")
         engine = None
         SessionLocal = None
 
-# Fallback in-memory list
 FALLBACK_WATCHLIST = [
     {"symbol": "NVDA", "company_name": "NVIDIA Corporation", "exchange": "NASDAQ", "target_buy_price": 115.00, "notes": "Consolidating near 50-day EMA"},
     {"symbol": "MSFT", "company_name": "Microsoft Corporation", "exchange": "NASDAQ", "target_buy_price": 410.00, "notes": "Enterprise Cloud & AI tailwinds"}
 ]
+
+class WatchlistUpdatePayload(BaseModel):
+    target_buy_price: Optional[float] = None
+    notes: Optional[str] = None
+
+class AIAnalysisRequest(BaseModel):
+    symbol: str
+    prompt_type: str = "summary"
+
+def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(50)
 
 @app.get("/")
 def root():
     return {
         "status": "online",
         "service": "Valoq Valuation Terminal API",
-        "version": "3.3.0",
+        "version": "3.4.0",
         "database": "Supabase PostgreSQL" if SessionLocal else "In-Memory Fallback"
     }
 
@@ -79,18 +103,6 @@ TICKER_UNIVERSE = [
     {"symbol": "WABAG.NS", "name": "VA Tech Wabag Ltd", "exchange": "NSE", "type": "Stock"},
     {"symbol": "TCS.NS", "name": "Tata Consultancy Services", "exchange": "NSE", "type": "Stock"},
 ]
-
-class AIAnalysisRequest(BaseModel):
-    symbol: str
-    prompt_type: str = "summary"
-
-def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss.replace(0, np.nan)
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.fillna(50)
 
 @app.get("/api/v1/stock/search")
 def search_stocks(q: str = Query(default="")):
@@ -244,9 +256,12 @@ def get_watchlist():
                     "symbol": r.symbol,
                     "company_name": r.company_name,
                     "exchange": r.exchange,
-                    "target_buy_price": float(r.target_buy_price) if r.target_buy_price else None,
+                    "target_buy_price": float(r.target_buy_price) if r.target_buy_price is not None else None,
                     "notes": r.notes
                 })
+        except Exception as e:
+            print(f"Error querying Supabase: {e}")
+            items = FALLBACK_WATCHLIST
         finally:
             db.close()
     else:
@@ -279,14 +294,19 @@ def add_to_watchlist(symbol: str = Query(...), company_name: str = Query(default
             if existing:
                 return {"status": "exists", "message": "Ticker already pinned"}
             new_row = WatchlistModel(
+                id=str(uuid.uuid4()),
                 symbol=clean,
                 company_name=name,
                 exchange=exchange,
-                notes="Pinned to Supabase database"
+                target_buy_price=None,
+                notes="Target entry and notes pending review"
             )
             db.add(new_row)
             db.commit()
             return {"status": "success", "item": {"symbol": clean, "company_name": name, "exchange": exchange}}
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=str(e))
         finally:
             db.close()
     else:
@@ -297,17 +317,50 @@ def add_to_watchlist(symbol: str = Query(...), company_name: str = Query(default
         FALLBACK_WATCHLIST.insert(0, entry)
         return {"status": "success", "item": entry}
 
+@app.patch("/api/v1/watchlist/{symbol}")
+def update_watchlist_item(symbol: str, payload: WatchlistUpdatePayload):
+    clean = symbol.strip().upper()
+    if SessionLocal:
+        db = SessionLocal()
+        try:
+            row = db.query(WatchlistModel).filter(WatchlistModel.symbol == clean).first()
+            if not row:
+                raise HTTPException(status_code=404, detail="Watchlist item not found")
+            if payload.target_buy_price is not None:
+                row.target_buy_price = payload.target_buy_price
+            if payload.notes is not None:
+                row.notes = payload.notes
+            db.commit()
+            return {"status": "success", "symbol": clean}
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            db.close()
+    else:
+        for item in FALLBACK_WATCHLIST:
+            if item["symbol"] == clean:
+                if payload.target_buy_price is not None:
+                    item["target_buy_price"] = payload.target_buy_price
+                if payload.notes is not None:
+                    item["notes"] = payload.notes
+                return {"status": "success", "symbol": clean}
+        raise HTTPException(status_code=404, detail="Item not found")
+
 @app.delete("/api/v1/watchlist/{symbol}")
 def remove_from_watchlist(symbol: str):
     clean = symbol.strip().upper()
     if SessionLocal:
         db = SessionLocal()
         try:
-            row = db.query(WatchlistModel).filter(WatchlistModel.symbol == clean).first()
-            if row:
-                db.delete(row)
-                db.commit()
+            rows = db.query(WatchlistModel).filter(WatchlistModel.symbol == clean).all()
+            for r in rows:
+                db.delete(r)
+            db.commit()
             return {"status": "success", "symbol": clean}
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=str(e))
         finally:
             db.close()
     else:
