@@ -105,27 +105,69 @@ def read_root():
 
 @app.get("/api/v1/stock/search")
 def search_stocks(q: str = Query(..., min_length=1)):
-    clean_q = q.strip().upper()
-    cache_key = f"search:{clean_q}"
+    clean_q = q.strip()
+    cache_key = f"search_global:{clean_q.upper()}"
     cached = get_cached_json(cache_key)
     if cached:
         return cached
 
-    universe = [
-        {"symbol": "AAPL", "name": "Apple Inc.", "exchange": "NASDAQ"},
-        {"symbol": "MSFT", "name": "Microsoft Corporation", "exchange": "NASDAQ"},
-        {"symbol": "NVDA", "name": "NVIDIA Corporation", "exchange": "NASDAQ"},
-        {"symbol": "GOOGL", "name": "Alphabet Inc.", "exchange": "NASDAQ"},
-        {"symbol": "AMZN", "name": "Amazon.com Inc.", "exchange": "NASDAQ"},
-        {"symbol": "META", "name": "Meta Platforms Inc.", "exchange": "NASDAQ"},
-        {"symbol": "TSLA", "name": "Tesla Inc.", "exchange": "NASDAQ"},
-        {"symbol": "BRK-B", "name": "Berkshire Hathaway Inc.", "exchange": "NYSE"},
-        {"symbol": "JPM", "name": "JPMorgan Chase & Co.", "exchange": "NYSE"},
-        {"symbol": "V", "name": "Visa Inc.", "exchange": "NYSE"}
-    ]
-    results = [item for item in universe if clean_q in item["symbol"] or clean_q in item["name"].upper()]
+    results = []
+    
+    # 1. First attempt: Use yfinance Search API
+    try:
+        s = yf.Search(clean_q, max_results=15)
+        quotes = getattr(s, "quotes", [])
+        for item in quotes:
+            sym = item.get("symbol")
+            if not sym:
+                continue
+            name = item.get("longname") or item.get("shortname") or sym
+            exch = item.get("exchDisp") or item.get("exchange") or "GLOBAL"
+            quote_type = item.get("quoteType", "EQUITY")
+            results.append({
+                "symbol": sym,
+                "name": f"{name} ({quote_type})",
+                "exchange": exch
+            })
+    except Exception as e:
+        print(f"yf.Search error: {e}")
+
+    # 2. Resilient Fallback: Direct Yahoo Finance Query API
+    if not results:
+        try:
+            import urllib.request
+            headers = {"User-Agent": "Mozilla/5.0"}
+            enc_q = urllib.parse.quote(clean_q)
+            url = f"https://query2.finance.yahoo.com/v1/finance/search?q={enc_q}&quotesCount=15&newsCount=0"
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=5) as response:
+                payload = json.loads(response.read().decode())
+                for item in payload.get("quotes", []):
+                    sym = item.get("symbol")
+                    if not sym:
+                        continue
+                    name = item.get("longname") or item.get("shortname") or sym
+                    exch = item.get("exchDisp") or item.get("exchange") or "GLOBAL"
+                    quote_type = item.get("quoteType", "EQUITY")
+                    results.append({
+                        "symbol": sym,
+                        "name": f"{name} ({quote_type})",
+                        "exchange": exch
+                    })
+        except Exception as err:
+            print(f"Direct Yahoo search fallback error: {err}")
+
+    # Fallback to direct input if query looks like a valid ticker
+    if not results:
+        results.append({
+            "symbol": clean_q.upper(),
+            "name": f"{clean_q.upper()} Instrument",
+            "exchange": "GLOBAL"
+        })
+
     set_cached_json(cache_key, results, ttl=300)
     return results
+
 
 @app.get("/api/v1/stock/quote")
 def get_stock_quote(symbol: str = Query(..., min_length=1), period: str = Query("1y")):
