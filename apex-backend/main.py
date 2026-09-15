@@ -1,3 +1,5 @@
+import google.generativeai as genai
+from fastapi.responses import StreamingResponse
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -457,3 +459,69 @@ def generate_ai_analysis(req: AIAnalysisRequest):
         return {"symbol": sym, "company_name": company, "prompt_type": req.prompt_type, "analysis": report}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Gemini 1.5 Live Telemetry Engine
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+
+@app.get("/api/v1/stock/ai-stream")
+async def stream_ai_analysis(
+    symbol: str = Query(...),
+    prompt_type: str = Query(default="summary"),
+    custom_query: Optional[str] = Query(default=None)
+):
+    clean_sym = symbol.strip().upper()
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    
+    if not api_key:
+        async def mock_generator():
+            msg = f"✦ [Valoq Engine Simulation Mode]\n\nGemini API key is not configured in Render environment variables.\n\nTo activate live LLM intelligence, add GEMINI_API_KEY in Render Dashboard -> apex-backend -> Environment."
+            for word in msg.split(" "):
+                yield f"data: {word} \n\n"
+                await asyncio.sleep(0.04)
+        return StreamingResponse(mock_generator(), media_type="text/event-stream")
+
+    # Fetch live financial context for grounding
+    try:
+        t = yf.Ticker(clean_sym)
+        info = t.info or {}
+        price = info.get("currentPrice") or info.get("regularMarketPrice") or "N/A"
+        pe = info.get("trailingPE") or "N/A"
+        fwd_pe = info.get("forwardPE") or "N/A"
+        market_cap = info.get("marketCap") or "N/A"
+        gross_margins = f"{round(info.get('grossMargins', 0) * 100, 2)}%" if info.get('grossMargins') else "N/A"
+        rev_growth = f"{round(info.get('revenueGrowth', 0) * 100, 2)}%" if info.get('revenueGrowth') else "N/A"
+        context_str = f"Company: {info.get('longName', clean_sym)} ({clean_sym}), Price: ${price}, Trailing P/E: {pe}, Forward P/E: {fwd_pe}, Gross Margin: {gross_margins}, Revenue Growth: {rev_growth}, Market Cap: {market_cap}."
+    except Exception:
+        context_str = f"Target Asset: {clean_sym}."
+
+    prompts = {
+        "summary": f"Act as an elite Wall Street equity analyst. Provide a crisp 3-paragraph executive investment memo on {clean_sym} utilizing this live data: {context_str}. Detail moat defensibility, revenue drivers, and current market positioning.",
+        "risks": f"Act as a forensic auditor. Conduct a deep SEC 10-K risk audit for {clean_sym} given current context: {context_str}. Detail operational liabilities, supply chain dependencies, and regulatory headwinds.",
+        "bull_bear": f"Provide an institutional Bull Case vs. Bear Case debate for {clean_sym} based on live telemetry: {context_str}. Include distinct catalysts and downside triggers with price elasticity scenarios.",
+        "margins": f"Evaluate operating margins, free cash flow conversion rates, and capital allocation strategy for {clean_sym} using: {context_str}."
+    }
+
+    selected_prompt = custom_query if custom_query else prompts.get(prompt_type, prompts["summary"])
+
+    async def token_generator():
+        try:
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content(selected_prompt, stream=True)
+            for chunk in response:
+                if chunk.text:
+                    clean_text = chunk.text.replace("
+", "___NEWLINE___")
+                    yield f"data: {clean_text}
+
+"
+                    await asyncio.sleep(0.01)
+        except Exception as e:
+            err_msg = f"Gemini stream encountered an issue: {str(e)}"
+            yield f"data: {err_msg}
+
+"
+
+    return StreamingResponse(token_generator(), media_type="text/event-stream")

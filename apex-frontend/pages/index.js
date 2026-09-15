@@ -37,6 +37,7 @@ export default function Home() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
   const [selectedPromptType, setSelectedPromptType] = useState("summary");
+  const [customAIQuery, setCustomAIQuery] = useState("");
 
   const [currentUser, setCurrentUser] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -173,26 +174,30 @@ export default function Home() {
     }
   };
 
-  const requestAIAnalysis = async (type = selectedPromptType) => {
+  const requestAIAnalysis = (type = selectedPromptType, custom = "") => {
     if (!data) return;
     setAiLoading(true);
     setSelectedPromptType(type);
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/stock/ai-analysis`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: data.symbol, prompt_type: type })
-      });
-      if (res.ok) {
-        const json = await res.json();
-        setAiResult(json.analysis);
-      }
-    } catch (err) {
-      console.error(err);
-      setAiResult("Telemetry pipeline failed to generate AI synthesis.");
-    } finally {
-      setAiLoading(false);
+    setAiResult("");
+
+    let url = `${API_BASE}/api/v1/stock/ai-stream?symbol=${data.symbol}&prompt_type=${type}`;
+    if (custom) {
+      url += `&custom_query=${encodeURIComponent(custom)}`;
     }
+
+    const eventSource = new EventSource(url);
+
+    eventSource.onmessage = (event) => {
+      setAiLoading(false);
+      const textChunk = event.data.replace(/___NEWLINE___/g, "\n");
+      setAiResult((prev) => prev + textChunk);
+    };
+
+    eventSource.onerror = (err) => {
+      console.error("SSE connection completed or interrupted", err);
+      eventSource.close();
+      setAiLoading(false);
+    };
   };
 
   useEffect(() => {
@@ -1917,16 +1922,62 @@ export default function Home() {
           </div>
 
           <div style={{ flex: 1, overflowY: "auto", padding: "20px 22px", fontSize: "0.85rem", lineHeight: 1.6 }}>
-            {aiLoading ? (
+            {aiLoading && !aiResult ? (
               <div style={{ color: "#94a3b8", textAlign: "center", marginTop: "60px" }}>
                 <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "50%", background: "#00f5a0" }} />
-                <div style={{ marginTop: "12px", fontSize: "0.8rem" }}>Synthesizing balance sheet & filing telemetry...</div>
+                <div style={{ marginTop: "12px", fontSize: "0.8rem" }}>Streaming live Gemini 1.5 financial telemetry...</div>
               </div>
             ) : (
               <div style={{ whiteSpace: "pre-line", color: "#e2e8f0" }}>
-                {aiResult || "Select an analytical prompt chip above to generate insights."}
+                {aiResult || "Select an analytical chip above or enter an equity research question below."}
               </div>
             )}
+          </div>
+
+          {/* Interactive Analyst Query Input */}
+          <div style={{ padding: "14px 20px", borderTop: "1px solid #1e293b", background: "#0e1422" }}>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (customAIQuery.trim()) {
+                  requestAIAnalysis("custom", customAIQuery);
+                  setCustomAIQuery("");
+                }
+              }}
+              style={{ display: "flex", gap: "8px" }}
+            >
+              <input
+                type="text"
+                placeholder={`Ask anything about ${data.symbol} (e.g. moat, margins, debt)...`}
+                value={customAIQuery}
+                onChange={(e) => setCustomAIQuery(e.target.value)}
+                style={{
+                  flex: 1,
+                  padding: "8px 12px",
+                  borderRadius: "6px",
+                  border: "1px solid #334155",
+                  background: "#1a2234",
+                  color: "#f8fafc",
+                  fontSize: "0.8rem",
+                  outline: "none"
+                }}
+              />
+              <button
+                type="submit"
+                style={{
+                  background: "#00d09c",
+                  color: "#090d14",
+                  border: "none",
+                  padding: "8px 14px",
+                  borderRadius: "6px",
+                  fontSize: "0.78rem",
+                  fontWeight: 800,
+                  cursor: "pointer"
+                }}
+              >
+                Ask
+              </button>
+            </form>
           </div>
         </div>
       )}
