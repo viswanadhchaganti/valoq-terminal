@@ -2,29 +2,26 @@ from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import yfinance as yf
-import json
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="Valoq Valuation Terminal Engine", version="3.0.0")
+app = FastAPI(title="Valoq Valuation Terminal Engine", version="3.1.0")
 
-# CORS Configuration
+# Allow all origins including Vercel production domains
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3005",
-        "http://127.0.0.1:3005"
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Autocomplete search universe
+@app.get("/")
+def root():
+    return {"status": "online", "service": "Valoq Valuation Terminal API"}
+
 TICKER_UNIVERSE = [
     {"symbol": "AAPL", "name": "Apple Inc.", "exchange": "NASDAQ", "type": "Stock"},
     {"symbol": "MSFT", "name": "Microsoft Corporation", "exchange": "NASDAQ", "type": "Stock"},
@@ -40,32 +37,26 @@ TICKER_UNIVERSE = [
     {"symbol": "TCS.NS", "name": "Tata Consultancy Services", "exchange": "NSE", "type": "Stock"},
 ]
 
-# Watchlist Store synced with database schema
 WATCHLIST_DB = [
     {"symbol": "NVDA", "company_name": "NVIDIA Corporation", "exchange": "NASDAQ", "target_buy_price": 115.00, "notes": "Consolidating near 50-day EMA"},
     {"symbol": "MSFT", "company_name": "Microsoft Corporation", "exchange": "NASDAQ", "target_buy_price": 410.00, "notes": "Enterprise Cloud & AI tailwinds"}
 ]
 
-# AI Analysis Request Schema
 class AIAnalysisRequest(BaseModel):
     symbol: str
-    prompt_type: str = "summary"  # summary, risks, bull_bear, margins
+    prompt_type: str = "summary"
 
 @app.get("/api/v1/stock/search")
 def search_stocks(q: str = Query(default="", description="Search query")):
     query = q.strip().upper()
     if not query:
         return []
-    matches = [
-        item for item in TICKER_UNIVERSE
-        if query in item["symbol"] or query in item["name"].upper()
-    ]
-    return matches[:6]
+    return [item for item in TICKER_UNIVERSE if query in item["symbol"] or query in item["name"].upper()][:6]
 
 @app.get("/api/v1/stock/quote")
 def get_quote(
-    symbol: str = Query(default="AAPL", description="US or Global ticker"),
-    period: str = Query(default="1y", description="Data range: 1d, 5d, 1mo, 1y, 5y, max")
+    symbol: str = Query(default="AAPL"),
+    period: str = Query(default="1y")
 ):
     clean_sym = symbol.strip().upper()
     try:
@@ -186,7 +177,6 @@ def get_quote(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Watchlist Endpoints
 @app.get("/api/v1/watchlist")
 def get_watchlist():
     enriched = []
@@ -201,11 +191,7 @@ def get_watchlist():
             current_p = 0.0
             chg_pct = 0.0
         
-        enriched.append({
-            **item,
-            "current_price": current_p,
-            "change_pct": chg_pct
-        })
+        enriched.append({**item, "current_price": current_p, "change_pct": chg_pct})
     return enriched
 
 @app.post("/api/v1/watchlist")
@@ -232,7 +218,6 @@ def remove_from_watchlist(symbol: str):
     WATCHLIST_DB = [item for item in WATCHLIST_DB if item["symbol"] != clean]
     return {"status": "success", "symbol": clean}
 
-# Valoq AI Analysis Endpoint
 @app.post("/api/v1/stock/ai-analysis")
 def generate_ai_analysis(req: AIAnalysisRequest):
     sym = req.symbol.strip().upper()
@@ -280,11 +265,6 @@ def generate_ai_analysis(req: AIAnalysisRequest):
                 f"the asset demonstrates defensive cash generation backed by superior return on invested capital."
             )
 
-        return {
-            "symbol": sym,
-            "company_name": company,
-            "prompt_type": req.prompt_type,
-            "analysis": report
-        }
+        return {"symbol": sym, "company_name": company, "prompt_type": req.prompt_type, "analysis": report}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
