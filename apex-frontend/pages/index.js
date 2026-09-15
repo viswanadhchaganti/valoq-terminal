@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { createChart } from "lightweight-charts";
 import ValoqLogo from "../components/ValoqLogo";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
+const API_BASE = "https://valoq-backend.onrender.com";
 
 export default function Home() {
   const [ticker, setTicker] = useState("AAPL");
