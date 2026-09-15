@@ -16,7 +16,7 @@ Valoq is a full-stack, institutional-grade equity analysis portal inspired by pl
                         v                         |
 +--------------------------------------------+-----------------------------+
 |                             BACKEND                                  |
-|        FastAPI (Python 3.11) • SQLlchemy 2.0 • Pandas �i NumPy          |
+|        FastAPI (Python 3.11) • SQLlchemy 2.0 • Pandas �i NumPy          |
 |                 Hosted on Render: valoq-backend.onrender.com             |
 +------------------------+-------------------------^------------------------+
                         | IPv4 Session Pooling     | Query Results
@@ -141,3 +141,17 @@ Every time a new feature or refinement is introduced:
    git commit -m "docs: sync terminal documentation with latest release"
    git push origin main
 EOF
+
+
+## 10. Production DNS & Edge Routing Topology
+
+Valoq uses an isolated edge architecture to split frontend asset delivery from backend financial telemetry:
+
+| Hostname | Type | Target / Value | Provider | Purpose |
+| :--- | :--- | :--- | :--- | :--- |
+| `valoq.co.uk` | **A** | `76.76.21.21` | Vercel Edge | Apex domain serving Next.js client bundles |
+| `www.valoq.co.uk` | **CNAME** | `cname.vercel-dns.com` | Vercel Edge | Auto-redirects all `www` requests to apex |
+| `api.valoq.co.uk` | **CNAME** | `valoq-backend.onrender.com` | Render | Dedicated sub-domain for FastAPI & SSE streams |
+
+* **SSL/TLS Encryption:** Automated TLS 1.3 encryption certificates managed at edge with auto-renewal via Let's Encrypt / DigiCert.
+* **CORS Policy:** FastAPI allows preflight and telemetry queries from `https://valoq.co.uk` and `https://www.valoq.co.uk`.
