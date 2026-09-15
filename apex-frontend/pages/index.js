@@ -17,14 +17,21 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
+  // Technical Overlays
+  const [showEMA50, setShowEMA50] = useState(true);
+  const [showSMA200, setShowSMA200] = useState(true);
+
+  // Watchlist State
   const [watchlist, setWatchlist] = useState([]);
   const [showWatchlistDrawer, setShowWatchlistDrawer] = useState(false);
 
+  // AI Drawer State
   const [showAIDrawer, setShowAIDrawer] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
   const [selectedPromptType, setSelectedPromptType] = useState("summary");
 
+  // DCF Sliders State
   const [growthRate, setGrowthRate] = useState(12.0);
   const [discountRate, setDiscountRate] = useState(8.5);
   const [terminalGrowth, setTerminalGrowth] = useState(3.0);
@@ -108,6 +115,7 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [query]);
 
+  // Render TradingView Chart with EMA and SMA
   useEffect(() => {
     if (!data || !chartContainerRef.current || !data.candles || data.candles.length === 0) return;
 
@@ -160,6 +168,35 @@ export default function Home() {
       })));
     }
 
+    // Overlay EMA 50
+    if (showEMA50) {
+      const emaSeries = chart.addLineSeries({
+        color: "#2563eb",
+        lineWidth: 2,
+        title: "EMA 50"
+      });
+      emaSeries.setData(
+        sortedCandles
+          .filter(c => c.ema50 !== null)
+          .map(c => ({ time: c.time, value: c.ema50 }))
+      );
+    }
+
+    // Overlay SMA 200
+    if (showSMA200) {
+      const smaSeries = chart.addLineSeries({
+        color: "#f59e0b",
+        lineWidth: 2,
+        title: "SMA 200"
+      });
+      smaSeries.setData(
+        sortedCandles
+          .filter(c => c.sma200 !== null)
+          .map(c => ({ time: c.time, value: c.sma200 }))
+      );
+    }
+
+    // Volume Series
     const volumeSeries = chart.addHistogramSeries({
       color: "#cbd5e1",
       priceFormat: { type: "volume" },
@@ -187,7 +224,7 @@ export default function Home() {
         chartInstance.current = null;
       }
     };
-  }, [data, chartType]);
+  }, [data, chartType, showEMA50, showSMA200]);
 
   const togglePinWatchlist = async () => {
     if (!data) return;
@@ -455,39 +492,72 @@ export default function Home() {
                     ))}
                   </div>
 
-                  <div style={{ display: "flex", gap: "6px", background: "#f1f5f9", padding: "3px", borderRadius: "8px" }}>
+                  {/* Technical Overlays & Style Controls */}
+                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                     <button
-                      onClick={() => setChartType("area")}
+                      onClick={() => setShowEMA50(!showEMA50)}
                       style={{
-                        background: chartType === "area" ? "#ffffff" : "transparent",
-                        color: chartType === "area" ? "#0f172a" : "#64748b",
-                        boxShadow: chartType === "area" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-                        border: "none",
-                        padding: "5px 12px",
+                        background: showEMA50 ? "#dbeafe" : "#f1f5f9",
+                        color: showEMA50 ? "#1d4ed8" : "#64748b",
+                        border: showEMA50 ? "1px solid #93c5fd" : "1px solid transparent",
+                        padding: "5px 10px",
                         borderRadius: "6px",
                         fontSize: "0.72rem",
                         fontWeight: 700,
                         cursor: "pointer"
                       }}
                     >
-                      Line
+                      ● 50 EMA
                     </button>
+
                     <button
-                      onClick={() => setChartType("candles")}
+                      onClick={() => setShowSMA200(!showSMA200)}
                       style={{
-                        background: chartType === "candles" ? "#ffffff" : "transparent",
-                        color: chartType === "candles" ? "#00d09c" : "#64748b",
-                        boxShadow: chartType === "candles" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-                        border: "none",
-                        padding: "5px 12px",
+                        background: showSMA200 ? "#fef3c7" : "#f1f5f9",
+                        color: showSMA200 ? "#b45309" : "#64748b",
+                        border: showSMA200 ? "1px solid #fde68a" : "1px solid transparent",
+                        padding: "5px 10px",
                         borderRadius: "6px",
                         fontSize: "0.72rem",
                         fontWeight: 700,
                         cursor: "pointer"
                       }}
                     >
-                      📊 Candles
+                      ● 200 SMA
                     </button>
+
+                    <div style={{ display: "flex", gap: "4px", background: "#f1f5f9", padding: "3px", borderRadius: "8px" }}>
+                      <button
+                        onClick={() => setChartType("area")}
+                        style={{
+                          background: chartType === "area" ? "#ffffff" : "transparent",
+                          color: chartType === "area" ? "#0f172a" : "#64748b",
+                          border: "none",
+                          padding: "5px 10px",
+                          borderRadius: "6px",
+                          fontSize: "0.72rem",
+                          fontWeight: 700,
+                          cursor: "pointer"
+                        }}
+                      >
+                        Line
+                      </button>
+                      <button
+                        onClick={() => setChartType("candles")}
+                        style={{
+                          background: chartType === "candles" ? "#ffffff" : "transparent",
+                          color: chartType === "candles" ? "#00d09c" : "#64748b",
+                          border: "none",
+                          padding: "5px 10px",
+                          borderRadius: "6px",
+                          fontSize: "0.72rem",
+                          fontWeight: 700,
+                          cursor: "pointer"
+                        }}
+                      >
+                        📊 Candles
+                      </button>
+                    </div>
                   </div>
                 </div>
 

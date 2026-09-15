@@ -2,14 +2,15 @@ from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import yfinance as yf
+import pandas as pd
+import numpy as np
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="Valoq Valuation Terminal Engine", version="3.1.0")
+app = FastAPI(title="Valoq Valuation Terminal Engine", version="3.2.0")
 
-# Allow all origins including Vercel production domains
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,7 +21,7 @@ app.add_middleware(
 
 @app.get("/")
 def root():
-    return {"status": "online", "service": "Valoq Valuation Terminal API"}
+    return {"status": "online", "service": "Valoq Valuation Terminal API", "version": "3.2.0"}
 
 TICKER_UNIVERSE = [
     {"symbol": "AAPL", "name": "Apple Inc.", "exchange": "NASDAQ", "type": "Stock"},
@@ -45,6 +46,14 @@ WATCHLIST_DB = [
 class AIAnalysisRequest(BaseModel):
     symbol: str
     prompt_type: str = "summary"
+
+def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(50)
 
 @app.get("/api/v1/stock/search")
 def search_stocks(q: str = Query(default="", description="Search query")):
@@ -72,6 +81,11 @@ def get_quote(
         if hist.empty:
             raise HTTPException(status_code=404, detail=f"Ticker {clean_sym} not found")
 
+        # Technical Indicators calculation
+        hist["EMA50"] = hist["Close"].ewm(span=50, adjust=False).mean()
+        hist["SMA200"] = hist["Close"].rolling(window=200, min_periods=1).mean()
+        hist["RSI"] = calculate_rsi(hist["Close"], 14)
+
         info = t.info or {}
         price = float(hist["Close"].iloc[-1])
         open_p = float(hist["Open"].iloc[0])
@@ -82,6 +96,7 @@ def get_quote(
         pe_sector = 25.8
         rev_growth = (info.get("revenueGrowth") or 0.08) * 100
         debt_to_equity = info.get("debtToEquity") or 110.0
+        current_rsi = round(float(hist["RSI"].iloc[-1]), 1)
 
         candles = []
         for ts, row in hist.iterrows():
@@ -91,7 +106,10 @@ def get_quote(
                 "high": round(float(row["High"]), 2),
                 "low": round(float(row["Low"]), 2),
                 "close": round(float(row["Close"]), 2),
-                "volume": int(row["Volume"])
+                "volume": int(row["Volume"]),
+                "ema50": round(float(row["EMA50"]), 2) if not np.isnan(row["EMA50"]) else None,
+                "sma200": round(float(row["SMA200"]), 2) if not np.isnan(row["SMA200"]) else None,
+                "rsi": round(float(row["RSI"]), 2) if not np.isnan(row["RSI"]) else 50.0
             })
 
         scorecard = {
@@ -116,9 +134,9 @@ def get_quote(
                 "metrics": f"Operating Margin: {round((info.get('operatingMargins') or 0.30) * 100, 1)}% • ROE: {round((info.get('returnOnEquity') or 0.16) * 100, 1)}%"
             },
             "entry_point": {
-                "tag": "Good",
-                "desc": "The stock is underpriced and is not in overbought zone",
-                "metrics": "RSI(14): 54.2 • Consolidating above 50-day EMA support"
+                "tag": "Good" if 30 <= current_rsi <= 65 else ("High" if current_rsi > 65 else "Low"),
+                "desc": "Favorable momentum structure" if current_rsi <= 65 else "Overbought momentum territory",
+                "metrics": f"RSI(14): {current_rsi} • 50 EMA: ${round(float(hist['EMA50'].iloc[-1]), 2)}"
             },
             "red_flags": {
                 "tag": "Low" if debt_to_equity < 160 else "High",
