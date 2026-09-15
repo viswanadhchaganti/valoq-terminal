@@ -430,3 +430,18 @@ def update_watchlist_item(symbol: str, payload: WatchlistPatch, user_id: Optiona
         return {"status": "updated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/admin/sync-data")
+async def trigger_data_sync(secret: str = Query(...)):
+    expected_secret = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "valoq-internal-key")
+    if secret != expected_secret:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    
+    # Run sync in background process
+    try:
+        import subprocess
+        subprocess.Popen([sys.executable, "ingest_worker.py"])
+        return {"status": "Ingestion pipeline launched in background"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
