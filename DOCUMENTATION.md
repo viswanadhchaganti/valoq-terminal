@@ -115,6 +115,12 @@ Valoq is a full-stack, institutional-grade equity analysis portal inspired by pl
 
 ---
 
+
+### 2.21. Search Navigation Action Trigger & Explicit Button
+* **What it is:** High-contrast emerald action button (`#059669`) with an SVG magnifying lens adjacent to the global search input.
+* **Why it matters:** Provides an accessible interface for mouse, mobile, and tablet interactions without relying strictly on hardware `Enter` keystrokes.
+
+---
 ## 3. Database Schema
 
 ```sql
