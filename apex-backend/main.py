@@ -6,10 +6,13 @@ import pandas as pd
 import numpy as np
 import os
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, Column, String, Numeric, Text, DateTime
+from sqlalchemy.orm import declarative_base, sessionmaker
+from datetime import datetime
 
 load_dotenv()
 
-app = FastAPI(title="Valoq Valuation Terminal Engine", version="3.2.0")
+app = FastAPI(title="Valoq Valuation Terminal Engine", version="3.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,9 +22,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ----------------- Supabase PostgreSQL Configuration -----------------
+DATABASE_URL = os.getenv("DATABASE_URL")
+engine = None
+SessionLocal = None
+Base = declarative_base()
+
+class WatchlistModel(Base):
+    __tablename__ = "watchlist"
+    symbol = Column(String(20), primary_key=True)
+    company_name = Column(String(255), nullable=False)
+    exchange = Column(String(20), default="NASDAQ")
+    target_buy_price = Column(Numeric(10, 2), nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+if DATABASE_URL:
+    try:
+        # Standardize postgres dialect for SQLAlchemy
+        if DATABASE_URL.startswith("postgres://"):
+            DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+        engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        print(f"Warning: PostgreSQL connection failed: {e}")
+        engine = None
+        SessionLocal = None
+
+# Fallback in-memory list
+FALLBACK_WATCHLIST = [
+    {"symbol": "NVDA", "company_name": "NVIDIA Corporation", "exchange": "NASDAQ", "target_buy_price": 115.00, "notes": "Consolidating near 50-day EMA"},
+    {"symbol": "MSFT", "company_name": "Microsoft Corporation", "exchange": "NASDAQ", "target_buy_price": 410.00, "notes": "Enterprise Cloud & AI tailwinds"}
+]
+
 @app.get("/")
 def root():
-    return {"status": "online", "service": "Valoq Valuation Terminal API", "version": "3.2.0"}
+    return {
+        "status": "online",
+        "service": "Valoq Valuation Terminal API",
+        "version": "3.3.0",
+        "database": "Supabase PostgreSQL" if SessionLocal else "In-Memory Fallback"
+    }
 
 TICKER_UNIVERSE = [
     {"symbol": "AAPL", "name": "Apple Inc.", "exchange": "NASDAQ", "type": "Stock"},
@@ -38,11 +80,6 @@ TICKER_UNIVERSE = [
     {"symbol": "TCS.NS", "name": "Tata Consultancy Services", "exchange": "NSE", "type": "Stock"},
 ]
 
-WATCHLIST_DB = [
-    {"symbol": "NVDA", "company_name": "NVIDIA Corporation", "exchange": "NASDAQ", "target_buy_price": 115.00, "notes": "Consolidating near 50-day EMA"},
-    {"symbol": "MSFT", "company_name": "Microsoft Corporation", "exchange": "NASDAQ", "target_buy_price": 410.00, "notes": "Enterprise Cloud & AI tailwinds"}
-]
-
 class AIAnalysisRequest(BaseModel):
     symbol: str
     prompt_type: str = "summary"
@@ -56,7 +93,7 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     return rsi.fillna(50)
 
 @app.get("/api/v1/stock/search")
-def search_stocks(q: str = Query(default="", description="Search query")):
+def search_stocks(q: str = Query(default="")):
     query = q.strip().upper()
     if not query:
         return []
@@ -81,7 +118,6 @@ def get_quote(
         if hist.empty:
             raise HTTPException(status_code=404, detail=f"Ticker {clean_sym} not found")
 
-        # Technical Indicators calculation
         hist["EMA50"] = hist["Close"].ewm(span=50, adjust=False).mean()
         hist["SMA200"] = hist["Close"].rolling(window=200, min_periods=1).mean()
         hist["RSI"] = calculate_rsi(hist["Close"], 14)
@@ -195,10 +231,29 @@ def get_quote(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ----------------- Supabase Watchlist Endpoints -----------------
 @app.get("/api/v1/watchlist")
 def get_watchlist():
+    items = []
+    if SessionLocal:
+        db = SessionLocal()
+        try:
+            records = db.query(WatchlistModel).all()
+            for r in records:
+                items.append({
+                    "symbol": r.symbol,
+                    "company_name": r.company_name,
+                    "exchange": r.exchange,
+                    "target_buy_price": float(r.target_buy_price) if r.target_buy_price else None,
+                    "notes": r.notes
+                })
+        finally:
+            db.close()
+    else:
+        items = FALLBACK_WATCHLIST
+
     enriched = []
-    for item in WATCHLIST_DB:
+    for item in items:
         try:
             t = yf.Ticker(item["symbol"])
             fast_info = t.fast_info
@@ -215,26 +270,50 @@ def get_watchlist():
 @app.post("/api/v1/watchlist")
 def add_to_watchlist(symbol: str = Query(...), company_name: str = Query(default=""), exchange: str = Query(default="NASDAQ")):
     clean = symbol.strip().upper()
-    for item in WATCHLIST_DB:
-        if item["symbol"] == clean:
-            return {"status": "exists", "message": "Ticker already pinned"}
-    
-    new_entry = {
-        "symbol": clean,
-        "company_name": company_name or clean,
-        "exchange": exchange,
-        "target_buy_price": None,
-        "notes": "Added from terminal workspace"
-    }
-    WATCHLIST_DB.insert(0, new_entry)
-    return {"status": "success", "item": new_entry}
+    name = company_name or clean
+
+    if SessionLocal:
+        db = SessionLocal()
+        try:
+            existing = db.query(WatchlistModel).filter(WatchlistModel.symbol == clean).first()
+            if existing:
+                return {"status": "exists", "message": "Ticker already pinned"}
+            new_row = WatchlistModel(
+                symbol=clean,
+                company_name=name,
+                exchange=exchange,
+                notes="Pinned to Supabase database"
+            )
+            db.add(new_row)
+            db.commit()
+            return {"status": "success", "item": {"symbol": clean, "company_name": name, "exchange": exchange}}
+        finally:
+            db.close()
+    else:
+        for item in FALLBACK_WATCHLIST:
+            if item["symbol"] == clean:
+                return {"status": "exists", "message": "Ticker already pinned"}
+        entry = {"symbol": clean, "company_name": name, "exchange": exchange, "target_buy_price": None, "notes": "Added locally"}
+        FALLBACK_WATCHLIST.insert(0, entry)
+        return {"status": "success", "item": entry}
 
 @app.delete("/api/v1/watchlist/{symbol}")
 def remove_from_watchlist(symbol: str):
     clean = symbol.strip().upper()
-    global WATCHLIST_DB
-    WATCHLIST_DB = [item for item in WATCHLIST_DB if item["symbol"] != clean]
-    return {"status": "success", "symbol": clean}
+    if SessionLocal:
+        db = SessionLocal()
+        try:
+            row = db.query(WatchlistModel).filter(WatchlistModel.symbol == clean).first()
+            if row:
+                db.delete(row)
+                db.commit()
+            return {"status": "success", "symbol": clean}
+        finally:
+            db.close()
+    else:
+        global FALLBACK_WATCHLIST
+        FALLBACK_WATCHLIST = [item for item in FALLBACK_WATCHLIST if item["symbol"] != clean]
+        return {"status": "success", "symbol": clean}
 
 @app.post("/api/v1/stock/ai-analysis")
 def generate_ai_analysis(req: AIAnalysisRequest):
