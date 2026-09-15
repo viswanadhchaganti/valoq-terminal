@@ -5,7 +5,7 @@ import { supabase } from "../lib/supabaseClient";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 
-const API_BASE = "https://valoq-backend.onrender.com";
+const API_BASE = "https://api.valoq.co.uk";
 
 export default function Home() {
   const [ticker, setTicker] = useState("AAPL");
