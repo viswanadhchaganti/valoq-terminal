@@ -12,7 +12,22 @@ from pydantic import BaseModel
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from cachetools import TTLCache
+try:
+    from cachetools import TTLCache
+    # memory_cache defined above
+except ImportError:
+    # Simple dictionary fallback if cachetools is building
+    class SimpleCache(dict):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+        def __getitem__(self, key):
+            item = super().get(key)
+            if item and time.time() - item["ts"] < 60:
+                return item["val"]
+            return None
+        def __setitem__(self, key, val):
+            super().__setitem__(key, {"val": val, "ts": time.time()})
+    memory_cache = SimpleCache()
 from supabase import create_client, Client
 
 try:
@@ -54,7 +69,7 @@ if redis and REDIS_URL:
     except Exception:
         redis_client = None
 
-memory_cache = TTLCache(maxsize=500, ttl=60)
+# memory_cache defined above
 
 def get_cached_json(key: str):
     if redis_client:
