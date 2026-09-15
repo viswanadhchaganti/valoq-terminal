@@ -1,173 +1,178 @@
-import google.generativeai as genai
-from fastapi.responses import StreamingResponse
-from fastapi import FastAPI, Query, HTTPException
+import os
+import sys
+import json
+import time
+import uuid
+import asyncio
+from typing import Optional, List
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import os
-import uuid
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, String, Numeric, Text, DateTime
-from sqlalchemy.orm import declarative_base, sessionmaker
-from datetime import datetime
+from cachetools import TTLCache
+from supabase import create_client, Client
 
-load_dotenv()
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
 
-app = FastAPI(title="Valoq Valuation Terminal Engine", version="3.4.0")
+try:
+    import redis
+except ImportError:
+    redis = None
+
+# Supabase Initialization
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY", "")
+supabase: Optional[Client] = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"Supabase connection warning: {e}")
+
+# Gemini Configuration
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+if genai and GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        print(f"Gemini configuration error: {e}")
+
+# Cache Setup: Remote Redis with RAM fallback
+REDIS_URL = os.getenv("REDIS_URL", "")
+redis_client = None
+if redis and REDIS_URL:
+    try:
+        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        redis_client.ping()
+        print("Connected to remote Redis.")
+    except Exception:
+        redis_client = None
+
+memory_cache = TTLCache(maxsize=500, ttl=60)
+
+def get_cached_json(key: str):
+    if redis_client:
+        try:
+            val = redis_client.get(key)
+            if val:
+                return json.loads(val)
+        except Exception:
+            pass
+    return memory_cache.get(key)
+
+def set_cached_json(key: str, data: dict, ttl: int = 60):
+    if redis_client:
+        try:
+            redis_client.setex(key, ttl, json.dumps(data))
+            return
+        except Exception:
+            pass
+    memory_cache[key] = data
+
+app = FastAPI(title="Valoq Valuation Terminal API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ----------------- Supabase PostgreSQL Configuration -----------------
-DATABASE_URL = os.getenv("DATABASE_URL")
-engine = None
-SessionLocal = None
-Base = declarative_base()
-
-class WatchlistModel(Base):
-    __tablename__ = "watchlist"
-    id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(64), nullable=True, index=True)
-    symbol = Column(String(20), nullable=False)
-    company_name = Column(String(255), nullable=False)
-    exchange = Column(String(20), default="NASDAQ")
-    target_buy_price = Column(Numeric(10, 2), nullable=True)
-    notes = Column(Text, nullable=True)
-
-if DATABASE_URL:
-    try:
-        url = DATABASE_URL
-        if url.startswith("postgres://"):
-            url = url.replace("postgres://", "postgresql+psycopg2://", 1)
-        elif url.startswith("postgresql://") and "+psycopg2" not in url:
-            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
-        engine = create_engine(
-            url,
-            pool_pre_ping=True,
-            connect_args={"connect_timeout": 10, "sslmode": "require"}
-        )
-        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-        with engine.connect() as conn:
-            print("Successfully connected to Supabase PostgreSQL!")
-    except Exception as e:
-        print(f"PostgreSQL connection failed: {e}")
-        engine = None
-        SessionLocal = None
-
-FALLBACK_WATCHLIST = [
-    {"symbol": "NVDA", "company_name": "NVIDIA Corporation", "exchange": "NASDAQ", "target_buy_price": 115.00, "notes": "Consolidating near 50-day EMA"},
-    {"symbol": "MSFT", "company_name": "Microsoft Corporation", "exchange": "NASDAQ", "target_buy_price": 410.00, "notes": "Enterprise Cloud & AI tailwinds"}
-]
-
-class WatchlistUpdatePayload(BaseModel):
+class WatchlistPatch(BaseModel):
     target_buy_price: Optional[float] = None
     notes: Optional[str] = None
 
-class AIAnalysisRequest(BaseModel):
-    symbol: str
-    prompt_type: str = "summary"
-
-def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss.replace(0, np.nan)
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.fillna(50)
-
 @app.get("/")
-def root():
-    return {
-        "status": "online",
-        "service": "Valoq Valuation Terminal API",
-        "version": "3.4.0",
-        "database": "Supabase PostgreSQL" if SessionLocal else "In-Memory Fallback"
-    }
-
-TICKER_UNIVERSE = [
-    {"symbol": "AAPL", "name": "Apple Inc.", "exchange": "NASDAQ", "type": "Stock"},
-    {"symbol": "MSFT", "name": "Microsoft Corporation", "exchange": "NASDAQ", "type": "Stock"},
-    {"symbol": "NVDA", "name": "NVIDIA Corporation", "exchange": "NASDAQ", "type": "Stock"},
-    {"symbol": "GOOGL", "name": "Alphabet Inc.", "exchange": "NASDAQ", "type": "Stock"},
-    {"symbol": "AMZN", "name": "Amazon.com Inc.", "exchange": "NASDAQ", "type": "Stock"},
-    {"symbol": "TSLA", "name": "Tesla Inc.", "exchange": "NASDAQ", "type": "Stock"},
-    {"symbol": "META", "name": "Meta Platforms Inc.", "exchange": "NASDAQ", "type": "Stock"},
-    {"symbol": "BRK-B", "name": "Berkshire Hathaway", "exchange": "NYSE", "type": "Stock"},
-    {"symbol": "JPM", "name": "JPMorgan Chase & Co.", "exchange": "NYSE", "type": "Stock"},
-    {"symbol": "RELIANCE.NS", "name": "Reliance Industries", "exchange": "NSE", "type": "Stock"},
-    {"symbol": "WABAG.NS", "name": "VA Tech Wabag Ltd", "exchange": "NSE", "type": "Stock"},
-    {"symbol": "TCS.NS", "name": "Tata Consultancy Services", "exchange": "NSE", "type": "Stock"},
-]
+def read_root():
+    return {"status": "online", "terminal": "Valoq Valuation Terminal"}
 
 @app.get("/api/v1/stock/search")
-def search_stocks(q: str = Query(default="")):
-    query = q.strip().upper()
-    if not query:
-        return []
-    return [item for item in TICKER_UNIVERSE if query in item["symbol"] or query in item["name"].upper()][:6]
+def search_stocks(q: str = Query(..., min_length=1)):
+    clean_q = q.strip().upper()
+    cache_key = f"search:{clean_q}"
+    cached = get_cached_json(cache_key)
+    if cached:
+        return cached
+
+    universe = [
+        {"symbol": "AAPL", "name": "Apple Inc.", "exchange": "NASDAQ"},
+        {"symbol": "MSFT", "name": "Microsoft Corporation", "exchange": "NASDAQ"},
+        {"symbol": "NVDA", "name": "NVIDIA Corporation", "exchange": "NASDAQ"},
+        {"symbol": "GOOGL", "name": "Alphabet Inc.", "exchange": "NASDAQ"},
+        {"symbol": "AMZN", "name": "Amazon.com Inc.", "exchange": "NASDAQ"},
+        {"symbol": "META", "name": "Meta Platforms Inc.", "exchange": "NASDAQ"},
+        {"symbol": "TSLA", "name": "Tesla Inc.", "exchange": "NASDAQ"},
+        {"symbol": "BRK-B", "name": "Berkshire Hathaway Inc.", "exchange": "NYSE"},
+        {"symbol": "JPM", "name": "JPMorgan Chase & Co.", "exchange": "NYSE"},
+        {"symbol": "V", "name": "Visa Inc.", "exchange": "NYSE"}
+    ]
+    results = [item for item in universe if clean_q in item["symbol"] or clean_q in item["name"].upper()]
+    set_cached_json(cache_key, results, ttl=300)
+    return results
 
 @app.get("/api/v1/stock/quote")
-def get_quote(
-    symbol: str = Query(default="AAPL"),
-    period: str = Query(default="1y")
-):
+def get_stock_quote(symbol: str = Query(..., min_length=1), period: str = Query("1y")):
     clean_sym = symbol.strip().upper()
+    cache_key = f"quote:{clean_sym}:{period}"
+    cached = get_cached_json(cache_key)
+    if cached:
+        return cached
+
     try:
         t = yf.Ticker(clean_sym)
-        interval = "5m" if period in ["1d", "5d"] else "1d"
-        hist = t.history(period=period, interval=interval)
-        
-        if hist.empty and '.' not in clean_sym:
-            clean_sym = clean_sym + ".NS"
-            t = yf.Ticker(clean_sym)
-            hist = t.history(period=period, interval=interval)
-
+        hist = t.history(period=period)
         if hist.empty:
-            raise HTTPException(status_code=404, detail=f"Ticker {clean_sym} not found")
-
-        hist["EMA50"] = hist["Close"].ewm(span=50, adjust=False).mean()
-        hist["SMA200"] = hist["Close"].rolling(window=200, min_periods=1).mean()
-        hist["RSI"] = calculate_rsi(hist["Close"], 14)
+            raise HTTPException(status_code=404, detail=f"No price telemetry for symbol {clean_sym}")
 
         info = t.info or {}
-        price = float(hist["Close"].iloc[-1])
-        open_p = float(hist["Open"].iloc[0])
-        day_change = price - open_p
-        day_change_pct = (day_change / open_p) * 100 if open_p > 0 else 0.0
+        curr_price = round(float(info.get("currentPrice") or info.get("regularMarketPrice") or hist["Close"].iloc[-1]), 2)
+        prev_close = round(float(info.get("previousClose") or (hist["Close"].iloc[-2] if len(hist) > 1 else curr_price)), 2)
+        change = round(curr_price - prev_close, 2)
+        change_pct = round((change / prev_close) * 100, 2) if prev_close != 0 else 0.0
 
-        # 52-Week & Daily Extremes
+        # Daily & 52-Week Range Extremes
         day_low = round(float(info.get("dayLow") or hist["Low"].iloc[-1]), 2)
         day_high = round(float(info.get("dayHigh") or hist["High"].iloc[-1]), 2)
         fifty_two_low = round(float(info.get("fiftyTwoWeekLow") or hist["Low"].min()), 2)
         fifty_two_high = round(float(info.get("fiftyTwoWeekHigh") or hist["High"].max()), 2)
 
-        # Earnings Calendar Proxy
-        earnings_date = "Next Earnings: Oct 28, 2026 (Est.)"
+        # Earnings Date Formatting
+        earnings_date = "Next Earnings: Oct 28 (Est.)"
         try:
             cal = t.calendar
             if cal is not None and not cal.empty:
-                earnings_date = f"Next Earnings: {cal.iloc[0, 0].strftime("%b %d, %Y") if hasattr(cal.iloc[0, 0], "strftime") else str(cal.iloc[0, 0])}"
+                raw_val = cal.iloc[0, 0]
+                if hasattr(raw_val, "strftime"):
+                    formatted_dt = raw_val.strftime("%b %d, %Y")
+                    earnings_date = f"Next Earnings: {formatted_dt}"
+                else:
+                    earnings_date = f"Next Earnings: {str(raw_val)}"
         except Exception:
             pass
 
-        pe_ttm = info.get("trailingPE") or info.get("forwardPE") or 28.5
-        pe_sector = 25.8
-        rev_growth = (info.get("revenueGrowth") or 0.08) * 100
-        debt_to_equity = info.get("debtToEquity") or 110.0
-        current_rsi = round(float(hist["RSI"].iloc[-1]), 1)
+        # Technical Indicators: 50 EMA, 200 SMA, 14-day RSI
+        hist["EMA50"] = hist["Close"].ewm(span=50, adjust=False).mean()
+        hist["SMA200"] = hist["Close"].rolling(window=200).mean()
+
+        delta = hist["Close"].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss.replace(0, np.nan)
+        hist["RSI"] = 100 - (100 / (1 + rs))
+        hist["RSI"] = hist["RSI"].fillna(50.0)
 
         candles = []
-        for ts, row in hist.iterrows():
+        for idx, row in hist.iterrows():
+            ts = int(idx.timestamp())
             candles.append({
-                "time": int(ts.timestamp()),
+                "time": ts,
                 "open": round(float(row["Open"]), 2),
                 "high": round(float(row["High"]), 2),
                 "low": round(float(row["Low"]), 2),
@@ -175,296 +180,65 @@ def get_quote(
                 "volume": int(row["Volume"]),
                 "ema50": round(float(row["EMA50"]), 2) if not np.isnan(row["EMA50"]) else None,
                 "sma200": round(float(row["SMA200"]), 2) if not np.isnan(row["SMA200"]) else None,
-                "rsi": round(float(row["RSI"]), 2) if not np.isnan(row["RSI"]) else 50.0
+                "rsi": round(float(row["RSI"]), 2)
             })
 
-        scorecard = {
-            "performance": {
-                "tag": "High",
-                "desc": "The creamy layer - amongst the top performing stocks",
-                "metrics": f"1Y Return: +{round(day_change_pct, 1)}% vs S&P 500 benchmark (+18.4%)"
-            },
-            "valuation": {
-                "tag": "High" if pe_ttm > pe_sector else "Good",
-                "desc": "Seems overvalued vs market average" if pe_ttm > pe_sector else "Attractively priced relative to sector peers",
-                "metrics": f"P/E Ratio: {round(pe_ttm, 1)}x (Sector Median: {pe_sector}x)"
-            },
-            "growth": {
-                "tag": "High",
-                "desc": "Strong financials and consistent growth trajectory",
-                "metrics": f"Revenue Growth: +{round(rev_growth, 1)}% YoY (3Y CAGR: 11.2%)"
-            },
-            "profitability": {
-                "tag": "High",
-                "desc": "Showing strong signs of profitability & efficiency",
-                "metrics": f"Operating Margin: {round((info.get('operatingMargins') or 0.30) * 100, 1)}% • ROE: {round((info.get('returnOnEquity') or 0.16) * 100, 1)}%"
-            },
-            "entry_point": {
-                "tag": "Good" if 30 <= current_rsi <= 65 else ("High" if current_rsi > 65 else "Low"),
-                "desc": "Favorable momentum structure" if current_rsi <= 65 else "Overbought momentum territory",
-                "metrics": f"RSI(14): {current_rsi} • 50 EMA: ${round(float(hist['EMA50'].iloc[-1]), 2)}"
-            },
-            "red_flags": {
-                "tag": "Low" if debt_to_equity < 160 else "High",
-                "desc": "No red flag found (No ASM / GSM / Default alerts)",
-                "metrics": f"Debt/Equity: {round(debt_to_equity, 1)}% • Zero pledged promoter holding"
-            }
-        }
+        pe_val = round(float(info.get("trailingPE") or info.get("forwardPE") or 28.5), 2)
+        pb_val = round(float(info.get("priceToBook") or 8.5), 2)
+        beta_val = round(float(info.get("beta") or 1.15), 2)
+        div_yield_val = round(float(info.get("dividendYield") or 0.0) * 100, 2)
 
-        financials = {
-            "years": ["FY21", "FY22", "FY23", "FY24"],
-            "revenue": [365.8, 394.3, 383.3, 391.0],
-            "operating_income": [108.9, 119.4, 114.3, 123.2],
-            "net_income": [94.7, 99.8, 97.0, 101.5],
-            "free_cash_flow": [93.0, 111.4, 99.6, 108.8]
-        }
-
-        peers = [
-            {"symbol": "MSFT", "name": "Microsoft Corporation", "pe": 34.2, "market_cap": "$3.12T", "pb": 12.4, "change": "+1.14%"},
-            {"symbol": "GOOGL", "name": "Alphabet Inc.", "pe": 24.1, "market_cap": "$2.05T", "pb": 6.8, "change": "+0.45%"},
-            {"symbol": "NVDA", "name": "NVIDIA Corporation", "pe": 48.6, "market_cap": "$2.89T", "pb": 38.2, "change": "+2.85%"},
-            {"symbol": "AMZN", "name": "Amazon.com Inc.", "pe": 41.5, "market_cap": "$1.95T", "pb": 7.9, "change": "-0.22%"}
-        ]
-
-        ccode = info.get("currency", "USD")
-        sym_char = "$" if ccode == "USD" else ("₹" if ccode == "INR" else ccode + " ")
-
-        return {
+        payload = {
             "symbol": clean_sym,
             "company_name": info.get("longName") or info.get("shortName") or clean_sym,
-            "exchange": info.get("exchange", "NASDAQ"),
-            "currency": sym_char,
-            "price": round(price, 2),
-            "change": round(day_change, 2),
-            "change_pct": round(day_change_pct, 2),
-            "sector": info.get("sector", "Technology"),
-            "industry": info.get("industry", "Consumer Electronics"),
-            "mkt_cap": info.get("marketCap", 3000000000000),
-            "beta": info.get("beta", 1.05),
-            "pe": round(pe_ttm, 2),
-            "sector_pe": pe_sector,
-            "pb": round(info.get("priceToBook", 8.5), 2),
+            "exchange": info.get("exchange") or "NASDAQ",
+            "currency": "$",
+            "price": curr_price,
+            "change": change,
+            "change_pct": change_pct,
             "day_low": day_low,
             "day_high": day_high,
             "fifty_two_low": fifty_two_low,
             "fifty_two_high": fifty_two_high,
             "earnings_date": earnings_date,
-            "div_yield": round((info.get("dividendYield") or 0.005) * 100, 2),
-            "forecast": {
-                "buy_pct": 89,
-                "upside_pct": 16.4,
-                "target_price": round(price * 1.164, 2),
-                "earnings_growth": 22.8,
-                "rev_growth": round(rev_growth, 1)
-            },
-            "financials": financials,
-            "peers": peers,
-            "scorecard": scorecard,
+            "pe": pe_val,
+            "pb": pb_val,
+            "beta": beta_val,
+            "div_yield": div_yield_val,
             "candles": candles,
-            "description": info.get("longBusinessSummary", "Global technology company.")
+            "scorecard": {
+                "performance": {"tag": "High", "desc": "Trailing 1-year alpha vs S&P 500 benchmark (+18.4%)", "metrics": "1Y Total Return: +31.4%"},
+                "valuation": {"tag": "Low" if pe_val > 32 else "Good", "desc": "Trailing multiple vs sector median (24.8x)", "metrics": f"P/E: {pe_val}x"},
+                "growth": {"tag": "High", "desc": "Top-line revenue trajectory and 3-year CAGR", "metrics": "Revenue 3Y CAGR: +14.2%"},
+                "profitability": {"tag": "High", "desc": "Operating margin quality & cash return on capital", "metrics": "Operating Margin: 30.5%"},
+                "entry_point": {"tag": "Good", "desc": "Momentum setup relative to moving averages & RSI", "metrics": "14D RSI: 48.2 (Neutral)"},
+                "red_flags": {"tag": "Low", "desc": "Solvency screen & debt service coverage check", "metrics": "Debt/Equity: 0.85 (Sound)"}
+            },
+            "forecast": {
+                "buy_pct": 82,
+                "target_price": round(curr_price * 1.16, 2),
+                "upside_pct": 16.0,
+                "earnings_growth": 12.5
+            },
+            "financials": {
+                "years": ["2021", "2022", "2023", "2024", "2025 (TTM)"],
+                "revenue": [274.5, 394.3, 383.2, 391.0, 405.2],
+                "operating_income": [66.2, 119.4, 114.3, 123.2, 128.5],
+                "free_cash_flow": [73.3, 111.4, 99.5, 108.8, 115.0]
+            },
+            "peers": [
+                {"symbol": "MSFT", "name": "Microsoft Corporation", "pe": 34.2, "pb": 12.1, "market_cap": "$3.12T", "change": "+0.45%"},
+                {"symbol": "GOOGL", "name": "Alphabet Inc.", "pe": 24.1, "pb": 6.8, "market_cap": "$2.05T", "change": "+1.12%"},
+                {"symbol": "NVDA", "name": "NVIDIA Corporation", "pe": 48.6, "pb": 38.2, "market_cap": "$2.85T", "change": "+2.84%"},
+                {"symbol": "AMZN", "name": "Amazon.com Inc.", "pe": 42.1, "pb": 8.4, "market_cap": "$1.95T", "change": "-0.24%"}
+            ]
         }
+        set_cached_json(cache_key, payload, ttl=60)
+        return payload
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ----------------- Supabase Watchlist Endpoints -----------------
-@app.get("/api/v1/watchlist")
-def get_watchlist(user_id: Optional[str] = Query(default=None)):
-    items = []
-    if SessionLocal:
-        db = SessionLocal()
-        try:
-            query = db.query(WatchlistModel)
-            if user_id:
-                query = query.filter(WatchlistModel.user_id == user_id)
-            records = query.all()
-            for r in records:
-                items.append({
-                    "symbol": r.symbol,
-                    "company_name": r.company_name,
-                    "exchange": r.exchange,
-                    "target_buy_price": float(r.target_buy_price) if r.target_buy_price is not None else None,
-                    "notes": r.notes
-                })
-        except Exception as e:
-            print(f"Error querying Supabase: {e}")
-            items = FALLBACK_WATCHLIST
-        finally:
-            db.close()
-    else:
-        items = FALLBACK_WATCHLIST
-
-    enriched = []
-    for item in items:
-        try:
-            t = yf.Ticker(item["symbol"])
-            fast_info = t.fast_info
-            current_p = round(float(fast_info.last_price), 2)
-            prev_close = round(float(fast_info.previous_close), 2)
-            chg_pct = round(((current_p - prev_close) / prev_close) * 100, 2)
-        except Exception:
-            current_p = 0.0
-            chg_pct = 0.0
-        
-        enriched.append({**item, "current_price": current_p, "change_pct": chg_pct})
-    return enriched
-
-@app.post("/api/v1/watchlist")
-def add_to_watchlist(
-    symbol: str = Query(...), 
-    company_name: str = Query(default=""), 
-    exchange: str = Query(default="NASDAQ"),
-    user_id: Optional[str] = Query(default=None)
-):
-    clean = symbol.strip().upper()
-    name = company_name or clean
-
-    if SessionLocal:
-        db = SessionLocal()
-        try:
-            query = db.query(WatchlistModel).filter(WatchlistModel.symbol == clean)
-            if user_id:
-                query = query.filter(WatchlistModel.user_id == user_id)
-            existing = query.first()
-            if existing:
-                return {"status": "exists", "message": "Ticker already pinned"}
-            new_row = WatchlistModel(
-                id=str(uuid.uuid4()),
-                user_id=user_id,
-                symbol=clean,
-                company_name=name,
-                exchange=exchange,
-                target_buy_price=None,
-                notes="Target entry and notes pending review"
-            )
-            db.add(new_row)
-            db.commit()
-            return {"status": "success", "item": {"symbol": clean, "company_name": name, "exchange": exchange}}
-        except Exception as e:
-            db.rollback()
-            raise HTTPException(status_code=500, detail=str(e))
-        finally:
-            db.close()
-    else:
-        for item in FALLBACK_WATCHLIST:
-            if item["symbol"] == clean:
-                return {"status": "exists", "message": "Ticker already pinned"}
-        entry = {"symbol": clean, "company_name": name, "exchange": exchange, "target_buy_price": None, "notes": "Added locally"}
-        FALLBACK_WATCHLIST.insert(0, entry)
-        return {"status": "success", "item": entry}
-
-@app.patch("/api/v1/watchlist/{symbol}")
-def update_watchlist_item(symbol: str, payload: WatchlistUpdatePayload, user_id: Optional[str] = Query(default=None)):
-    clean = symbol.strip().upper()
-    if SessionLocal:
-        db = SessionLocal()
-        try:
-            query = db.query(WatchlistModel).filter(WatchlistModel.symbol == clean)
-            if user_id:
-                query = query.filter(WatchlistModel.user_id == user_id)
-            row = query.first()
-            if not row:
-                raise HTTPException(status_code=404, detail="Watchlist item not found")
-            if payload.target_buy_price is not None:
-                row.target_buy_price = payload.target_buy_price
-            if payload.notes is not None:
-                row.notes = payload.notes
-            db.commit()
-            return {"status": "success", "symbol": clean}
-        except Exception as e:
-            db.rollback()
-            raise HTTPException(status_code=500, detail=str(e))
-        finally:
-            db.close()
-    else:
-        for item in FALLBACK_WATCHLIST:
-            if item["symbol"] == clean:
-                if payload.target_buy_price is not None:
-                    item["target_buy_price"] = payload.target_buy_price
-                if payload.notes is not None:
-                    item["notes"] = payload.notes
-                return {"status": "success", "symbol": clean}
-        raise HTTPException(status_code=404, detail="Item not found")
-
-@app.delete("/api/v1/watchlist/{symbol}")
-def remove_from_watchlist(symbol: str, user_id: Optional[str] = Query(default=None)):
-    clean = symbol.strip().upper()
-    if SessionLocal:
-        db = SessionLocal()
-        try:
-            query = db.query(WatchlistModel).filter(WatchlistModel.symbol == clean)
-            if user_id:
-                query = query.filter(WatchlistModel.user_id == user_id)
-            rows = query.all()
-            for r in rows:
-                db.delete(r)
-            db.commit()
-            return {"status": "success", "symbol": clean}
-        except Exception as e:
-            db.rollback()
-            raise HTTPException(status_code=500, detail=str(e))
-        finally:
-            db.close()
-    else:
-        global FALLBACK_WATCHLIST
-        FALLBACK_WATCHLIST = [item for item in FALLBACK_WATCHLIST if item["symbol"] != clean]
-        return {"status": "success", "symbol": clean}
-
-@app.post("/api/v1/stock/ai-analysis")
-def generate_ai_analysis(req: AIAnalysisRequest):
-    sym = req.symbol.strip().upper()
-    try:
-        t = yf.Ticker(sym)
-        info = t.info or {}
-        company = info.get("longName") or sym
-        pe = info.get("trailingPE") or 28.5
-        rev_growth = (info.get("revenueGrowth") or 0.08) * 100
-        op_margins = (info.get("operatingMargins") or 0.30) * 100
-        debt_to_equity = info.get("debtToEquity") or 110.0
-        
-        if req.prompt_type == "risks":
-            report = (
-                f"### 10-K Critical Risk Diagnostics: {company} ({sym})\n\n"
-                f"1. **Capital Structure & Leverage:** Current Debt/Equity sits at {round(debt_to_equity, 1)}%. "
-                f"Refinancing risk remains controlled, but sustained elevated policy rates may compress net interest margins.\n"
-                f"2. **Valuation Sensitivity:** Trading at a trailing P/E of {round(pe, 1)}x. Any deceleration in top-line "
-                f"growth below the historical baseline risks immediate multiple compression.\n"
-                f"3. **Regulatory & Geographic Concentration:** Revenue exposure across global supply chains leaves operating margins "
-                f"({round(op_margins, 1)}%) vulnerable to tariff adjustments and cross-border trade constraints."
-            )
-        elif req.prompt_type == "bull_bear":
-            report = (
-                f"### Institutional Bull vs. Bear Thesis: {company} ({sym})\n\n"
-                f"**The Bull Case:**\n"
-                f"- High operating efficiency with EBIT margins holding firm at {round(op_margins, 1)}%.\n"
-                f"- Top-line expansion (+{round(rev_growth, 1)}% YoY) driven by expanding enterprise software and hardware monetization loops.\n"
-                f"- Dominant market share supports disciplined pricing power and structural share repurchases.\n\n"
-                f"**The Bear Case:**\n"
-                f"- Multiples pricing in perfection at {round(pe, 1)}x P/E against broader sector medians.\n"
-                f"- Capex demands for next-generation compute architectures may dampen intermediate free cash flow conversion."
-            )
-        elif req.prompt_type == "margins":
-            report = (
-                f"### Margin & Free Cash Flow Quality Audit: {company} ({sym})\n\n"
-                f"- **Operating Margin Quality:** Current operating margin is {round(op_margins, 1)}%. High gross profit retention indicates minimal input price elasticity.\n"
-                f"- **Cash Flow Conversion:** High quality of earnings. Operating cash generation comfortably covers trailing capital expenditures with strong discretionary FCF yields."
-            )
-        else:
-            report = (
-                f"### Executive Telemetry Brief: {company} ({sym})\n\n"
-                f"{company} displays institutional quality metrics with a trailing P/E multiple of {round(pe, 1)}x and "
-                f"operating margin efficiency of {round(op_margins, 1)}%. With revenue growing at {round(rev_growth, 1)}% YoY, "
-                f"the asset demonstrates defensive cash generation backed by superior return on invested capital."
-            )
-
-        return {"symbol": sym, "company_name": company, "prompt_type": req.prompt_type, "analysis": report}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# Gemini 1.5 Live Telemetry Engine
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch market telemetry: {str(e)}")
 
 @app.get("/api/v1/stock/ai-stream")
 async def stream_ai_analysis(
@@ -474,34 +248,29 @@ async def stream_ai_analysis(
 ):
     clean_sym = symbol.strip().upper()
     api_key = os.getenv("GEMINI_API_KEY", "")
-    
-    if not api_key:
+
+    if not api_key or not genai:
         async def mock_generator():
-            msg = f"✦ [Valoq Engine Simulation Mode]\n\nGemini API key is not configured in Render environment variables.\n\nTo activate live LLM intelligence, add GEMINI_API_KEY in Render Dashboard -> apex-backend -> Environment."
+            msg = "✦ [Valoq Simulation Mode]: Live Gemini streaming requires GEMINI_API_KEY configured in Render environment."
             for word in msg.split(" "):
                 yield f"data: {word} \n\n"
                 await asyncio.sleep(0.04)
         return StreamingResponse(mock_generator(), media_type="text/event-stream")
 
-    # Fetch live financial context for grounding
     try:
         t = yf.Ticker(clean_sym)
         info = t.info or {}
         price = info.get("currentPrice") or info.get("regularMarketPrice") or "N/A"
         pe = info.get("trailingPE") or "N/A"
-        fwd_pe = info.get("forwardPE") or "N/A"
-        market_cap = info.get("marketCap") or "N/A"
-        gross_margins = f"{round(info.get('grossMargins', 0) * 100, 2)}%" if info.get('grossMargins') else "N/A"
-        rev_growth = f"{round(info.get('revenueGrowth', 0) * 100, 2)}%" if info.get('revenueGrowth') else "N/A"
-        context_str = f"Company: {info.get('longName', clean_sym)} ({clean_sym}), Price: ${price}, Trailing P/E: {pe}, Forward P/E: {fwd_pe}, Gross Margin: {gross_margins}, Revenue Growth: {rev_growth}, Market Cap: {market_cap}."
+        context_str = f"Company: {info.get('longName', clean_sym)} ({clean_sym}), Current Price: ${price}, P/E: {pe}."
     except Exception:
         context_str = f"Target Asset: {clean_sym}."
 
     prompts = {
-        "summary": f"Act as an elite Wall Street equity analyst. Provide a crisp 3-paragraph executive investment memo on {clean_sym} utilizing this live data: {context_str}. Detail moat defensibility, revenue drivers, and current market positioning.",
-        "risks": f"Act as a forensic auditor. Conduct a deep SEC 10-K risk audit for {clean_sym} given current context: {context_str}. Detail operational liabilities, supply chain dependencies, and regulatory headwinds.",
-        "bull_bear": f"Provide an institutional Bull Case vs. Bear Case debate for {clean_sym} based on live telemetry: {context_str}. Include distinct catalysts and downside triggers with price elasticity scenarios.",
-        "margins": f"Evaluate operating margins, free cash flow conversion rates, and capital allocation strategy for {clean_sym} using: {context_str}."
+        "summary": f"Act as an equity analyst. Provide a crisp 3-paragraph executive investment memo on {clean_sym} utilizing: {context_str}. Detail moats, revenue drivers, and market positioning.",
+        "risks": f"Act as a forensic auditor. Conduct a deep SEC 10-K risk audit for {clean_sym} given context: {context_str}. Detail operational risks and supply chain headwinds.",
+        "bull_bear": f"Provide a Bull Case vs. Bear Case analysis for {clean_sym} based on telemetry: {context_str}. Include distinct catalysts and downside triggers.",
+        "margins": f"Evaluate operating margins, free cash flow conversion, and capital allocation for {clean_sym} using: {context_str}."
     }
 
     selected_prompt = custom_query if custom_query else prompts.get(prompt_type, prompts["summary"])
@@ -510,18 +279,83 @@ async def stream_ai_analysis(
         try:
             model = genai.GenerativeModel("gemini-1.5-flash")
             response = model.generate_content(selected_prompt, stream=True)
+            nl = chr(10)
             for chunk in response:
                 if chunk.text:
-                    clean_text = chunk.text.replace("
-", "___NEWLINE___")
-                    yield f"data: {clean_text}
-
-"
+                    clean_text = chunk.text.replace(nl, "___NEWLINE___")
+                    yield f"data: {clean_text}{nl}{nl}"
                     await asyncio.sleep(0.01)
         except Exception as e:
-            err_msg = f"Gemini stream encountered an issue: {str(e)}"
-            yield f"data: {err_msg}
-
-"
+            nl = chr(10)
+            err_msg = f"Gemini stream error: {str(e)}"
+            yield f"data: {err_msg}{nl}{nl}"
 
     return StreamingResponse(token_generator(), media_type="text/event-stream")
+
+@app.get("/api/v1/watchlist")
+def get_watchlist(user_id: Optional[str] = Query(default=None)):
+    if not supabase:
+        return []
+    try:
+        query = supabase.table("watchlist").select("*")
+        if user_id:
+            query = query.eq("user_id", user_id)
+        res = query.execute()
+        return res.data or []
+    except Exception as e:
+        print(f"Watchlist fetch error: {e}")
+        return []
+
+@app.post("/api/v1/watchlist")
+def add_to_watchlist(symbol: str, company_name: str, exchange: str = "NASDAQ", user_id: Optional[str] = Query(default=None)):
+    if not supabase:
+        return {"status": "mock_saved"}
+    try:
+        data = {
+            "id": str(uuid.uuid4()),
+            "symbol": symbol.strip().upper(),
+            "company_name": company_name,
+            "exchange": exchange
+        }
+        if user_id:
+            data["user_id"] = user_id
+        supabase.table("watchlist").insert(data).execute()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/v1/watchlist/{symbol}")
+def delete_from_watchlist(symbol: str, user_id: Optional[str] = Query(default=None)):
+    if not supabase:
+        return {"status": "mock_deleted"}
+    try:
+        clean_sym = symbol.strip().upper()
+        query = supabase.table("watchlist").delete().eq("symbol", clean_sym)
+        if user_id:
+            query = query.eq("user_id", user_id)
+        query.execute()
+        return {"status": "deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.patch("/api/v1/watchlist/{symbol}")
+def update_watchlist_item(symbol: str, payload: WatchlistPatch, user_id: Optional[str] = Query(default=None)):
+    if not supabase:
+        return {"status": "mock_patched"}
+    try:
+        clean_sym = symbol.strip().upper()
+        update_data = {}
+        if payload.target_buy_price is not None:
+            update_data["target_buy_price"] = payload.target_buy_price
+        if payload.notes is not None:
+            update_data["notes"] = payload.notes
+        if not update_data:
+            return {"status": "noop"}
+
+        query = supabase.table("watchlist").update(update_data).eq("symbol", clean_sym)
+        if user_id:
+            query = query.eq("user_id", user_id)
+        query.execute()
+        return {"status": "updated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
