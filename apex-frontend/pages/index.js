@@ -20,15 +20,12 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
 
-  // Theme State (Dark / Light)
   const [darkMode, setDarkMode] = useState(false);
 
-  // Technical Overlays & Oscillators
   const [showEMA50, setShowEMA50] = useState(true);
   const [showSMA200, setShowSMA200] = useState(true);
   const [showRSI, setShowRSI] = useState(true);
 
-  // Watchlist State & Comparison Matrix
   const [watchlist, setWatchlist] = useState([]);
   const [showWatchlistDrawer, setShowWatchlistDrawer] = useState(false);
   const [editingNotes, setEditingNotes] = useState({});
@@ -36,32 +33,27 @@ export default function Home() {
   const [comparisonData, setComparisonData] = useState([]);
   const [comparisonLoading, setComparisonLoading] = useState(false);
 
-  // AI Drawer State
   const [showAIDrawer, setShowAIDrawer] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
   const [selectedPromptType, setSelectedPromptType] = useState("summary");
 
-  // User Authentication State
   const [currentUser, setCurrentUser] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authMode, setAuthMode] = useState("signin"); // "signin" or "signup"
+  const [authMode, setAuthMode] = useState("signin");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authStatusMsg, setAuthStatusMsg] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
 
-  // Portfolio Analytics State
   const [portfolioWeights, setPortfolioWeights] = useState({});
   const [isExportingPDF, setIsExportingPDF] = useState(false);
   const pdfReportRef = useRef(null);
 
-  // DCF Sliders State
   const [growthRate, setGrowthRate] = useState(12.0);
   const [discountRate, setDiscountRate] = useState(8.5);
   const [terminalGrowth, setTerminalGrowth] = useState(3.0);
 
-  // WACC Calculator Modal State
   const [showWaccModal, setShowWaccModal] = useState(false);
   const [riskFreeRate, setRiskFreeRate] = useState(4.25);
   const [equityRiskPremium, setEquityRiskPremium] = useState(5.0);
@@ -74,7 +66,6 @@ export default function Home() {
   const mainChartInstance = useRef(null);
   const rsiChartInstance = useRef(null);
 
-  // Color Tokens based on Theme
   const theme = {
     bg: darkMode ? "#0b0f19" : "#f7f9fb",
     cardBg: darkMode ? "#111827" : "#ffffff",
@@ -86,6 +77,16 @@ export default function Home() {
     gridLines: darkMode ? "#1a2234" : "#f8fafc",
     headerBg: darkMode ? "#0e1422" : "#ffffff"
   };
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setCurrentUser(session?.user || null);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCurrentUser(session?.user || null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   const fetchStock = async (sym, period) => {
     setLoading(true);
@@ -135,6 +136,17 @@ export default function Home() {
   };
 
   useEffect(() => {
+    fetchStock(ticker, timeframe);
+    fetchWatchlist();
+  }, [ticker, timeframe, currentUser]);
+
+  useEffect(() => {
+    if (activeTab === "compare" || activeTab === "portfolio") {
+      fetchComparisonTelemetry();
+    }
+  }, [activeTab, watchlist]);
+
+  useEffect(() => {
     if (comparisonData.length > 0) {
       const equalWeight = Math.round(100 / comparisonData.length);
       const initial = {};
@@ -142,12 +154,6 @@ export default function Home() {
       setPortfolioWeights(initial);
     }
   }, [comparisonData]);
-
-  useEffect(() => {
-    if (activeTab === "compare" || activeTab === "portfolio") {
-      fetchComparisonTelemetry();
-    }
-  }, [activeTab, watchlist]);
 
   const saveWatchlistEdits = async (sym) => {
     const payload = {};
@@ -189,24 +195,6 @@ export default function Home() {
     }
   };
 
-  // Supabase Auth Session Listener
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setCurrentUser(session?.user || null);
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setCurrentUser(session?.user || null);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    fetchStock(ticker, timeframe);
-    fetchWatchlist();
-  }, [ticker, timeframe, currentUser]);
-
   useEffect(() => {
     if (!query.trim()) {
       setSuggestions([]);
@@ -228,7 +216,6 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [query]);
 
-  // Synchronized Multi-Chart Setup (Main + RSI) with Theme Reactive Sync
   useEffect(() => {
     if (!data || !mainChartContainerRef.current || !data.candles || data.candles.length === 0) return;
 
@@ -247,7 +234,6 @@ export default function Home() {
       .filter((v, i, a) => a.findIndex(t => t.time === v.time) === i)
       .sort((a, b) => a.time - b.time);
 
-    // Primary Candlestick Canvas
     const chart = createChart(mainChartContainerRef.current, {
       width: mainChartContainerRef.current.clientWidth,
       height: 320,
@@ -310,7 +296,6 @@ export default function Home() {
       color: c.close >= c.open ? "rgba(0, 208, 156, 0.4)" : "rgba(235, 87, 87, 0.4)"
     })));
 
-    // Synchronized RSI Oscillator Canvas
     if (showRSI && rsiChartContainerRef.current) {
       const rsiChart = createChart(rsiChartContainerRef.current, {
         width: rsiChartContainerRef.current.clientWidth,
@@ -371,12 +356,12 @@ export default function Home() {
   const togglePinWatchlist = async () => {
     if (!data) return;
     const isPinned = watchlist.some(w => w.symbol === data.symbol);
+    const userParam = currentUser?.id ? `?user_id=${currentUser.id}` : "";
     if (isPinned) {
-      const userParam = currentUser?.id ? `?user_id=${currentUser.id}` : "";
       await fetch(`${API_BASE}/api/v1/watchlist/${data.symbol}${userParam}`, { method: "DELETE" });
     } else {
-      const userParam = currentUser?.id ? `&user_id=${currentUser.id}` : "";
-      await fetch(`${API_BASE}/api/v1/watchlist?symbol=${data.symbol}&company_name=${encodeURIComponent(data.company_name)}&exchange=${data.exchange}${userParam}`, { method: "POST" });
+      const addParam = currentUser?.id ? `&user_id=${currentUser.id}` : "";
+      await fetch(`${API_BASE}/api/v1/watchlist?symbol=${data.symbol}&company_name=${encodeURIComponent(data.company_name)}&exchange=${data.exchange}${addParam}`, { method: "POST" });
     }
     fetchWatchlist();
   };
@@ -387,7 +372,21 @@ export default function Home() {
     setShowDropdown(false);
   };
 
-  // CAPM & WACC Mathematical Calculation
+  const calculateDerivedWACC = () => {
+    const beta = data?.beta || 1.05;
+    const costOfEquity = riskFreeRate + (beta * equityRiskPremium);
+    const afterTaxCostOfDebt = costOfDebt * (1 - (taxRate / 100));
+    const debtWeight = 100 - equityWeight;
+    const derivedWacc = ((equityWeight / 100) * costOfEquity) + ((debtWeight / 100) * afterTaxCostOfDebt);
+    return {
+      costOfEquity: Math.round(costOfEquity * 100) / 100,
+      afterTaxCostOfDebt: Math.round(afterTaxCostOfDebt * 100) / 100,
+      wacc: Math.round(derivedWacc * 100) / 100
+    };
+  };
+
+  const waccValues = calculateDerivedWACC();
+
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
     setAuthLoading(true);
@@ -420,7 +419,6 @@ export default function Home() {
     setCurrentUser(null);
   };
 
-  // Portfolio Analytics Engine
   const calculatePortfolioMetrics = () => {
     if (!comparisonData || comparisonData.length === 0) {
       return { weightedBeta: 0, weightedYield: 0, weightedUpside: 0, var95: 0, totalWeight: 0 };
@@ -442,7 +440,6 @@ export default function Home() {
     const weightedBeta = Math.round(sumBeta * factor * 100) / 100;
     const weightedYield = Math.round(sumYield * factor * 100) / 100;
     const weightedUpside = Math.round(sumUpside * factor * 10) / 10;
-    // Parametric 1Y Value-at-Risk (95% CI) based on weighted beta & historical volatility proxy
     const var95 = Math.round((weightedBeta * 16.5 * 1.65) * 10) / 10;
 
     return { weightedBeta, weightedYield, weightedUpside, var95, totalWeight: totalW };
@@ -450,7 +447,6 @@ export default function Home() {
 
   const portMetrics = calculatePortfolioMetrics();
 
-  // Institutional PDF Generator
   const exportPDFTearSheet = async () => {
     if (!pdfReportRef.current) return;
     setIsExportingPDF(true);
@@ -485,22 +481,56 @@ export default function Home() {
     }
   };
 
-  const calculateDerivedWACC = () => {
-    const beta = data?.beta || 1.05;
-    const costOfEquity = riskFreeRate + (beta * equityRiskPremium);
-    const afterTaxCostOfDebt = costOfDebt * (1 - (taxRate / 100));
-    const debtWeight = 100 - equityWeight;
-    const derivedWacc = ((equityWeight / 100) * costOfEquity) + ((debtWeight / 100) * afterTaxCostOfDebt);
-    return {
-      costOfEquity: Math.round(costOfEquity * 100) / 100,
-      afterTaxCostOfDebt: Math.round(afterTaxCostOfDebt * 100) / 100,
-      wacc: Math.round(derivedWacc * 100) / 100
-    };
+  const generateSensitivityMatrix = () => {
+    if (!data) return { waccSteps: [], gSteps: [], matrix: [] };
+    const baseFCF = 105.0;
+    const g = growthRate / 100;
+    const sharesOutstanding = 15.3;
+
+    const waccSteps = [
+      discountRate - 1.5,
+      discountRate - 0.75,
+      discountRate,
+      discountRate + 0.75,
+      discountRate + 1.5
+    ].map(w => Math.round(w * 100) / 100);
+
+    const gSteps = [
+      terminalGrowth - 1.0,
+      terminalGrowth - 0.5,
+      terminalGrowth,
+      terminalGrowth + 0.5,
+      terminalGrowth + 1.0
+    ].map(tg => Math.round(tg * 100) / 100);
+
+    const matrix = waccSteps.map(waccVal => {
+      const r = waccVal / 100;
+      return gSteps.map(gVal => {
+        const tg = gVal / 100;
+        if (r <= tg) return { fairValue: 0, upside: -100 };
+
+        let pvFutureFCF = 0;
+        let currentFCF = baseFCF;
+        for (let i = 1; i <= 5; i++) {
+          currentFCF *= (1 + g);
+          pvFutureFCF += currentFCF / Math.pow(1 + r, i);
+        }
+
+        const terminalValue = (currentFCF * (1 + tg)) / (r - tg);
+        const pvTerminalValue = terminalValue / Math.pow(1 + r, 5);
+        const enterpriseValue = pvFutureFCF + pvTerminalValue;
+        const fairValue = Math.round(((enterpriseValue * 1000) / (sharesOutstanding * 1000)) * 100) / 100;
+        const upside = Math.round(((fairValue - data.price) / data.price) * 1000) / 10;
+
+        return { fairValue, upside, isCenter: waccVal === discountRate && gVal === terminalGrowth };
+      });
+    });
+
+    return { waccSteps, gSteps, matrix };
   };
 
-  const waccValues = calculateDerivedWACC();
+  const sensitivity = generateSensitivityMatrix();
 
-  // DCF Intrinsic Formula
   const calculateDCF = () => {
     if (!data) return { fairValue: 0, marginOfSafety: 0, enterpriseValue: 0, pvFutureFCF: 0, pvTerminalValue: 0 };
     const baseFCF = 105.0;
@@ -557,7 +587,8 @@ export default function Home() {
       ["Implied Upside / Downside", `${dcf.marginOfSafety}%`]
     ];
 
-    const csvContent = "data:text/csv;charset=utf-8," + rows.map(e => e.join(",")).join("\n");
+    const csvContent = "data:text/csv;charset=utf-8," + rows.map(e => e.join(",")).join("
+");
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
@@ -567,64 +598,24 @@ export default function Home() {
     document.body.removeChild(link);
   };
 
-  
-  // 2D DCF Sensitivity Matrix Generator
-  const generateSensitivityMatrix = () => {
-    if (!data) return { waccSteps: [], gSteps: [], matrix: [] };
-    const baseFCF = 105.0;
-    const g = growthRate / 100;
-    const sharesOutstanding = 15.3;
-
-    // Steps centered around current slider settings
-    const waccSteps = [
-      discountRate - 1.5,
-      discountRate - 0.75,
-      discountRate,
-      discountRate + 0.75,
-      discountRate + 1.5
-    ].map(w => Math.round(w * 100) / 100);
-
-    const gSteps = [
-      terminalGrowth - 1.0,
-      terminalGrowth - 0.5,
-      terminalGrowth,
-      terminalGrowth + 0.5,
-      terminalGrowth + 1.0
-    ].map(tg => Math.round(tg * 100) / 100);
-
-    const matrix = waccSteps.map(waccVal => {
-      const r = waccVal / 100;
-      return gSteps.map(gVal => {
-        const tg = gVal / 100;
-        if (r <= tg) return { fairValue: 0, upside: -100 };
-
-        let pvFutureFCF = 0;
-        let currentFCF = baseFCF;
-        for (let i = 1; i <= 5; i++) {
-          currentFCF *= (1 + g);
-          pvFutureFCF += currentFCF / Math.pow(1 + r, i);
-        }
-
-        const terminalValue = (currentFCF * (1 + tg)) / (r - tg);
-        const pvTerminalValue = terminalValue / Math.pow(1 + r, 5);
-        const enterpriseValue = pvFutureFCF + pvTerminalValue;
-        const fairValue = Math.round(((enterpriseValue * 1000) / (sharesOutstanding * 1000)) * 100) / 100;
-        const upside = Math.round(((fairValue - data.price) / data.price) * 1000) / 10;
-
-        return { fairValue, upside, isCenter: waccVal === discountRate && gVal === terminalGrowth };
-      });
-    });
-
-    return { waccSteps, gSteps, matrix };
-  };
-
-  const sensitivity = generateSensitivityMatrix();
-
   const dcfResult = calculateDCF();
   const isCurrentPinned = data && watchlist.some(w => w.symbol === data.symbol);
 
   return (
     <div style={{ background: theme.bg, minHeight: "100vh", fontFamily: "sans-serif", color: theme.text, transition: "background 0.2s, color 0.2s" }}>
+      <style jsx global>{`
+        .valoq-layout-grid {
+          display: grid;
+          grid-template-columns: 360px 1fr;
+          gap: 20px;
+        }
+        @media (max-width: 1024px) {
+          .valoq-layout-grid {
+            grid-template-columns: 1fr !important;
+          }
+        }
+      `}</style>
+
       {/* Global Macro Bar */}
       <div style={{ background: theme.cardBg, padding: "6px 24px", borderBottom: `1px solid ${theme.border}`, fontSize: "0.74rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", gap: "20px", overflowX: "auto" }}>
@@ -634,7 +625,6 @@ export default function Home() {
           <span><strong>GOLD:</strong> $2,584.10 <span style={{ color: "#00d09c" }}>+0.95% ▲</span></span>
         </div>
 
-        {/* Theme Toggle Button */}
         <button
           onClick={() => setDarkMode(!darkMode)}
           style={{
@@ -756,7 +746,6 @@ export default function Home() {
               ★ Watchlist ({watchlist.length})
             </button>
 
-            {/* User Auth Button */}
             {currentUser ? (
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                 <span style={{ fontSize: "0.74rem", color: theme.textSub }}>
@@ -813,7 +802,7 @@ export default function Home() {
             {errorMsg}
           </div>
         ) : data && (
-          <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: "20px" }}>
+          <div className="valoq-layout-grid">
             <div>
               <div style={{ background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: "12px", padding: "18px", marginBottom: "16px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -837,11 +826,56 @@ export default function Home() {
                     {isCurrentPinned ? "★ Pinned" : "+ Pin"}
                   </button>
                 </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: "10px", marginBottom: "14px" }}>
                   <span style={{ fontSize: "1.8rem", fontWeight: 800, color: theme.text }}>{data.currency}{data.price.toFixed(2)}</span>
                   <span style={{ color: data.change >= 0 ? "#00d09c" : "#eb5757", fontWeight: 700 }}>
                     {data.change >= 0 ? "+" : ""}{data.change_pct}%
                   </span>
+                </div>
+
+                {/* Range Bars */}
+                <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: "12px", display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.68rem", color: theme.textSub, marginBottom: "4px" }}>
+                      <span>Today Low: <strong>${data.day_low || (data.price * 0.98).toFixed(2)}</strong></span>
+                      <span style={{ fontWeight: 700, color: theme.text }}>Day Range</span>
+                      <span>Today High: <strong>${data.day_high || (data.price * 1.02).toFixed(2)}</strong></span>
+                    </div>
+                    <div style={{ height: "4px", background: theme.border, borderRadius: "2px", position: "relative" }}>
+                      <div style={{
+                        position: "absolute",
+                        left: `${Math.min(Math.max((((data.price - (data.day_low || data.price * 0.98)) / Math.max(((data.day_high || data.price * 1.02) - (data.day_low || data.price * 0.98)), 0.01)) * 100), 5), 95)}%`,
+                        top: "-4px",
+                        width: "12px",
+                        height: "12px",
+                        borderRadius: "50%",
+                        background: "#00d09c",
+                        boxShadow: "0 0 4px #00d09c",
+                        transform: "translateX(-50%)"
+                      }} />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.68rem", color: theme.textSub, marginBottom: "4px" }}>
+                      <span>52W L: <strong>${data.fifty_two_low || (data.price * 0.7).toFixed(2)}</strong></span>
+                      <span style={{ fontWeight: 700, color: theme.text }}>52-Week Range</span>
+                      <span>52W H: <strong>${data.fifty_two_high || (data.price * 1.3).toFixed(2)}</strong></span>
+                    </div>
+                    <div style={{ height: "4px", background: theme.border, borderRadius: "2px", position: "relative" }}>
+                      <div style={{
+                        position: "absolute",
+                        left: `${Math.min(Math.max((((data.price - (data.fifty_two_low || data.price * 0.7)) / Math.max(((data.fifty_two_high || data.price * 1.3) - (data.fifty_two_low || data.price * 0.7)), 0.01)) * 100), 5), 95)}%`,
+                        top: "-4px",
+                        width: "12px",
+                        height: "12px",
+                        borderRadius: "50%",
+                        background: "#38bdf8",
+                        boxShadow: "0 0 4px #38bdf8",
+                        transform: "translateX(-50%)"
+                      }} />
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -879,7 +913,7 @@ export default function Home() {
             </div>
 
             <div>
-              {/* Main Candlestick Panel */}
+              {/* Candlestick & RSI Panel */}
               <div style={{ background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: "12px", padding: "18px", marginBottom: "20px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px", flexWrap: "wrap", gap: "10px" }}>
                   <div style={{ display: "flex", gap: "4px" }}>
@@ -1002,14 +1036,15 @@ export default function Home() {
                 )}
               </div>
 
-              {/* Multi-Tab Analytics Workspace */}
+              {/* Workspace */}
               <div style={{ background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: "12px", padding: "18px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${theme.border}`, paddingBottom: "12px", marginBottom: "16px", flexWrap: "wrap", gap: "10px" }}>
-                  <div style={{ display: "flex", gap: "20px" }}>
+                  <div style={{ display: "flex", gap: "16px", overflowX: "auto" }}>
                     {[
                       { id: "dcf", label: "⚡ DCF Intrinsic Valuation" },
                       { id: "compare", label: "⚖ Side-by-Side Matrix" },
                       { id: "portfolio", label: "📊 Portfolio Risk & VaR" },
+                      { id: "earnings", label: "📅 7-Day Earnings Radar" },
                       { id: "overview", label: "Overview & Forecasts" },
                       { id: "financials", label: "Income & Cash Flows" },
                       { id: "peers", label: "Sector Peers" }
@@ -1024,8 +1059,9 @@ export default function Home() {
                           paddingBottom: "8px",
                           fontWeight: activeTab === tab.id ? 800 : 600,
                           color: activeTab === tab.id ? theme.text : theme.textSub,
-                          fontSize: "0.85rem",
-                          cursor: "pointer"
+                          fontSize: "0.82rem",
+                          cursor: "pointer",
+                          whiteSpace: "nowrap"
                         }}
                       >
                         {tab.label}
@@ -1061,13 +1097,10 @@ export default function Home() {
                           borderRadius: "6px",
                           fontSize: "0.75rem",
                           fontWeight: 800,
-                          cursor: isExportingPDF ? "not-allowed" : "pointer",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "6px"
+                          cursor: isExportingPDF ? "not-allowed" : "pointer"
                         }}
                       >
-                        {isExportingPDF ? "Rendering PDF..." : "📄 Export PDF Report"}
+                        {isExportingPDF ? "Rendering..." : "📄 Export PDF"}
                       </button>
                       <button
                         onClick={exportDCFModelCSV}
@@ -1079,13 +1112,10 @@ export default function Home() {
                           borderRadius: "6px",
                           fontSize: "0.75rem",
                           fontWeight: 700,
-                          cursor: "pointer",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "6px"
+                          cursor: "pointer"
                         }}
                       >
-                        📥 Export Tear Sheet
+                        📥 CSV
                       </button>
                     </div>
                   )}
@@ -1316,7 +1346,7 @@ export default function Home() {
                   </div>
                 )}
 
-                                {/* TAB: PORTFOLIO RISK & WEIGHTED VAR */}
+                {/* TAB 3: PORTFOLIO RISK & WEIGHTED VAR */}
                 {activeTab === "portfolio" && (
                   <div>
                     {comparisonLoading ? (
@@ -1329,7 +1359,6 @@ export default function Home() {
                       </div>
                     ) : (
                       <div>
-                        {/* Top Portfolio Metrics KPI Bar */}
                         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginBottom: "20px" }}>
                           <div style={{ background: theme.cardSub, padding: "14px", borderRadius: "10px", border: `1px solid ${theme.border}` }}>
                             <span style={{ fontSize: "0.7rem", color: theme.textSub, fontWeight: 700 }}>PORTFOLIO BETA</span>
@@ -1366,7 +1395,6 @@ export default function Home() {
                           </div>
                         </div>
 
-                        {/* Interactive Weight Allocation Sliders */}
                         <div style={{ background: theme.cardSub, padding: "16px", borderRadius: "10px", border: `1px solid ${theme.border}` }}>
                           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px", alignItems: "center" }}>
                             <strong style={{ fontSize: "0.85rem", color: theme.text }}>Allocation Weights</strong>
@@ -1406,7 +1434,56 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* TAB 3: OVERVIEW & FORECASTS */}
+                {/* TAB 4: 7-DAY EARNINGS RADAR */}
+                {activeTab === "earnings" && (
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                      <div>
+                        <strong style={{ fontSize: "0.95rem", color: theme.text }}>Upcoming Corporate Earnings & Reporting Radar</strong>
+                        <div style={{ fontSize: "0.72rem", color: theme.textSub }}>Institutional filing consensus and release calendar for active universe</div>
+                      </div>
+                      <span style={{ fontSize: "0.74rem", background: "rgba(0, 208, 156, 0.15)", color: "#00d09c", padding: "4px 8px", borderRadius: "6px", fontWeight: 700 }}>
+                        {data.earnings_date || "Earnings Imminent"}
+                      </span>
+                    </div>
+
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", textAlign: "left", fontSize: "0.82rem", borderCollapse: "collapse" }}>
+                        <thead>
+                          <tr style={{ borderBottom: `1px solid ${theme.border}`, color: theme.textSub }}>
+                            <th style={{ padding: "10px 8px" }}>Company</th>
+                            <th style={{ padding: "10px 8px", textAlign: "right" }}>Expected Date</th>
+                            <th style={{ padding: "10px 8px", textAlign: "right" }}>Consensus EPS</th>
+                            <th style={{ padding: "10px 8px", textAlign: "right" }}>YoY Growth</th>
+                            <th style={{ padding: "10px 8px", textAlign: "right" }}>Implied Volatility Move</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[
+                            { sym: data.symbol, name: data.company_name, date: "Oct 28 (Est.)", eps: "$1.64", growth: "+14.2%", move: "+/- 4.8%" },
+                            { sym: "MSFT", name: "Microsoft Corporation", date: "Oct 24", eps: "$3.10", growth: "+11.8%", move: "+/- 3.9%" },
+                            { sym: "GOOGL", name: "Alphabet Inc.", date: "Oct 29", eps: "$1.85", growth: "+16.5%", move: "+/- 5.2%" },
+                            { sym: "NVDA", name: "NVIDIA Corporation", date: "Nov 19", eps: "$0.74", growth: "+42.1%", move: "+/- 8.5%" },
+                            { sym: "AMZN", name: "Amazon.com Inc.", date: "Oct 31", eps: "$1.14", growth: "+21.0%", move: "+/- 6.1%" }
+                          ].map(item => (
+                            <tr key={item.sym} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                              <td style={{ padding: "12px 8px" }}>
+                                <strong style={{ color: theme.text }}>{item.sym}</strong>
+                                <span style={{ fontSize: "0.72rem", color: theme.textSub, marginLeft: "6px" }}>{item.name}</span>
+                              </td>
+                              <td style={{ textAlign: "right", color: theme.text }}>{item.date}</td>
+                              <td style={{ textAlign: "right", fontWeight: 700, color: theme.text }}>{item.eps}</td>
+                              <td style={{ textAlign: "right", color: "#00d09c", fontWeight: 700 }}>{item.growth}</td>
+                              <td style={{ textAlign: "right", color: "#f59e0b", fontWeight: 700 }}>{item.move}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 5: OVERVIEW & FORECASTS */}
                 {activeTab === "overview" && (
                   <div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "14px", marginBottom: "20px" }}>
@@ -1445,7 +1522,7 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* TAB 4: FINANCIALS */}
+                {/* TAB 6: FINANCIALS */}
                 {activeTab === "financials" && data.financials && (
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", textAlign: "left", fontSize: "0.82rem", borderCollapse: "collapse" }}>
@@ -1481,7 +1558,7 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* TAB 5: SECTOR PEERS */}
+                {/* TAB 7: PEERS */}
                 {activeTab === "peers" && data.peers && (
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", textAlign: "left", fontSize: "0.82rem", borderCollapse: "collapse" }}>
@@ -1519,7 +1596,6 @@ export default function Home() {
                 )}
               </div>
             </div>
-
           </div>
         )}
       </main>
@@ -1854,7 +1930,8 @@ export default function Home() {
           </div>
         </div>
       )}
-      {/* Supabase User Authentication Modal */}
+
+      {/* Auth Modal */}
       {showAuthModal && (
         <div style={{
           position: "fixed",
