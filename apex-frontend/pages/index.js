@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createChart } from "lightweight-charts";
 import ValoqLogo from "../components/ValoqLogo";
+import { supabase } from "../lib/supabaseClient";
 
 const API_BASE = "https://valoq-backend.onrender.com";
 
@@ -38,6 +39,15 @@ export default function Home() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
   const [selectedPromptType, setSelectedPromptType] = useState("summary");
+
+  // User Authentication State
+  const [currentUser, setCurrentUser] = useState(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState("signin"); // "signin" or "signup"
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authStatusMsg, setAuthStatusMsg] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
 
   // DCF Sliders State
   const [growthRate, setGrowthRate] = useState(12.0);
@@ -88,7 +98,8 @@ export default function Home() {
 
   const fetchWatchlist = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/watchlist`);
+      const userParam = currentUser?.id ? `?user_id=${currentUser.id}` : "";
+      const res = await fetch(`${API_BASE}/api/v1/watchlist${userParam}`);
       if (res.ok) {
         const json = await res.json();
         setWatchlist(json);
@@ -128,7 +139,8 @@ export default function Home() {
     if (editingNotes[sym] !== undefined) payload.notes = editingNotes[sym];
 
     try {
-      await fetch(`${API_BASE}/api/v1/watchlist/${sym}`, {
+      const userParam = currentUser?.id ? `?user_id=${currentUser.id}` : "";
+      await fetch(`${API_BASE}/api/v1/watchlist/${sym}${userParam}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -161,10 +173,23 @@ export default function Home() {
     }
   };
 
+  // Supabase Auth Session Listener
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setCurrentUser(session?.user || null);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCurrentUser(session?.user || null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
   useEffect(() => {
     fetchStock(ticker, timeframe);
     fetchWatchlist();
-  }, [ticker, timeframe]);
+  }, [ticker, timeframe, currentUser]);
 
   useEffect(() => {
     if (!query.trim()) {
@@ -331,9 +356,11 @@ export default function Home() {
     if (!data) return;
     const isPinned = watchlist.some(w => w.symbol === data.symbol);
     if (isPinned) {
-      await fetch(`${API_BASE}/api/v1/watchlist/${data.symbol}`, { method: "DELETE" });
+      const userParam = currentUser?.id ? `?user_id=${currentUser.id}` : "";
+      await fetch(`${API_BASE}/api/v1/watchlist/${data.symbol}${userParam}`, { method: "DELETE" });
     } else {
-      await fetch(`${API_BASE}/api/v1/watchlist?symbol=${data.symbol}&company_name=${encodeURIComponent(data.company_name)}&exchange=${data.exchange}`, { method: "POST" });
+      const userParam = currentUser?.id ? `&user_id=${currentUser.id}` : "";
+      await fetch(`${API_BASE}/api/v1/watchlist?symbol=${data.symbol}&company_name=${encodeURIComponent(data.company_name)}&exchange=${data.exchange}${userParam}`, { method: "POST" });
     }
     fetchWatchlist();
   };
@@ -345,6 +372,38 @@ export default function Home() {
   };
 
   // CAPM & WACC Mathematical Calculation
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthStatusMsg("");
+    try {
+      if (authMode === "signup") {
+        const { error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) throw error;
+        setAuthStatusMsg("Account created! Check your email to confirm registration.");
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) throw error;
+        setShowAuthModal(false);
+      }
+    } catch (err) {
+      setAuthStatusMsg(err.message || "Authentication failed");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setCurrentUser(null);
+  };
+
   const calculateDerivedWACC = () => {
     const beta = data?.beta || 1.05;
     const costOfEquity = riskFreeRate + (beta * equityRiskPremium);
@@ -615,6 +674,45 @@ export default function Home() {
             >
               ★ Watchlist ({watchlist.length})
             </button>
+
+            {/* User Auth Button */}
+            {currentUser ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ fontSize: "0.74rem", color: theme.textSub }}>
+                  {currentUser.email.split("@")[0]}
+                </span>
+                <button
+                  onClick={handleSignOut}
+                  style={{
+                    background: "none",
+                    border: `1px solid ${theme.border}`,
+                    color: theme.textSub,
+                    padding: "4px 8px",
+                    borderRadius: "6px",
+                    fontSize: "0.7rem",
+                    cursor: "pointer"
+                  }}
+                >
+                  Sign Out
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => { setShowAuthModal(true); setAuthStatusMsg(""); }}
+                style={{
+                  background: "#00d09c",
+                  color: "#090d14",
+                  border: "none",
+                  padding: "6px 12px",
+                  borderRadius: "6px",
+                  fontSize: "0.75rem",
+                  fontWeight: 800,
+                  cursor: "pointer"
+                }}
+              >
+                Sign In
+              </button>
+            )}
 
             <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.78rem", fontWeight: 600, color: theme.textSub }}>
               <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#00d09c", boxShadow: "0 0 8px #00d09c" }} />
@@ -1562,6 +1660,136 @@ export default function Home() {
                 {aiResult || "Select an analytical prompt chip above to generate insights."}
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {/* Supabase User Authentication Modal */}
+      {showAuthModal && (
+        <div style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0,0,0,0.6)",
+          backdropFilter: "blur(4px)",
+          zIndex: 200,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "20px"
+        }}>
+          <div style={{
+            background: theme.cardBg,
+            border: `1px solid ${theme.border}`,
+            borderRadius: "14px",
+            width: "100%",
+            maxWidth: "400px",
+            padding: "24px",
+            boxShadow: "0 20px 25px -5px rgba(0,0,0,0.5)"
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+              <h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 800, color: theme.text }}>
+                {authMode === "signin" ? "Sign In to Valoq" : "Create Valoq Account"}
+              </h3>
+              <button
+                onClick={() => setShowAuthModal(false)}
+                style={{ background: "none", border: "none", fontSize: "1.2rem", cursor: "pointer", color: theme.textSub }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleAuthSubmit} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              <div>
+                <label style={{ fontSize: "0.75rem", color: theme.textSub, display: "block", marginBottom: "4px" }}>Email</label>
+                <input
+                  type="email"
+                  required
+                  placeholder="analyst@firm.com"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    borderRadius: "6px",
+                    border: `1px solid ${theme.border}`,
+                    background: darkMode ? "#1a2234" : "#ffffff",
+                    color: theme.text,
+                    fontSize: "0.85rem",
+                    outline: "none"
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: "0.75rem", color: theme.textSub, display: "block", marginBottom: "4px" }}>Password</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="••••••••"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "8px 12px",
+                    borderRadius: "6px",
+                    border: `1px solid ${theme.border}`,
+                    background: darkMode ? "#1a2234" : "#ffffff",
+                    color: theme.text,
+                    fontSize: "0.85rem",
+                    outline: "none"
+                  }}
+                />
+              </div>
+
+              {authStatusMsg && (
+                <div style={{ fontSize: "0.75rem", color: authStatusMsg.includes("Check") ? "#00d09c" : "#eb5757", marginTop: "4px" }}>
+                  {authStatusMsg}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                style={{
+                  background: "#00d09c",
+                  color: "#090d14",
+                  border: "none",
+                  padding: "10px",
+                  borderRadius: "8px",
+                  fontSize: "0.85rem",
+                  fontWeight: 800,
+                  cursor: authLoading ? "not-allowed" : "pointer",
+                  marginTop: "8px"
+                }}
+              >
+                {authLoading ? "Authenticating..." : (authMode === "signin" ? "Sign In" : "Sign Up")}
+              </button>
+            </form>
+
+            <div style={{ marginTop: "16px", textAlign: "center", fontSize: "0.75rem", color: theme.textSub }}>
+              {authMode === "signin" ? (
+                <span>
+                  Don't have an account?{" "}
+                  <a
+                    href="#"
+                    onClick={(e) => { e.preventDefault(); setAuthMode("signup"); setAuthStatusMsg(""); }}
+                    style={{ color: "#00d09c", fontWeight: 700 }}
+                  >
+                    Create one
+                  </a>
+                </span>
+              ) : (
+                <span>
+                  Already have an account?{" "}
+                  <a
+                    href="#"
+                    onClick={(e) => { e.preventDefault(); setAuthMode("signin"); setAuthStatusMsg(""); }}
+                    style={{ color: "#00d09c", fontWeight: 700 }}
+                  >
+                    Sign In
+                  </a>
+                </span>
+              )}
+            </div>
           </div>
         </div>
       )}

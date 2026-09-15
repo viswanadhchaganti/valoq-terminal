@@ -33,6 +33,7 @@ Base = declarative_base()
 class WatchlistModel(Base):
     __tablename__ = "watchlist"
     id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(64), nullable=True, index=True)
     symbol = Column(String(20), nullable=False)
     company_name = Column(String(255), nullable=False)
     exchange = Column(String(20), default="NASDAQ")
@@ -245,12 +246,15 @@ def get_quote(
 
 # ----------------- Supabase Watchlist Endpoints -----------------
 @app.get("/api/v1/watchlist")
-def get_watchlist():
+def get_watchlist(user_id: Optional[str] = Query(default=None)):
     items = []
     if SessionLocal:
         db = SessionLocal()
         try:
-            records = db.query(WatchlistModel).all()
+            query = db.query(WatchlistModel)
+            if user_id:
+                query = query.filter(WatchlistModel.user_id == user_id)
+            records = query.all()
             for r in records:
                 items.append({
                     "symbol": r.symbol,
@@ -283,18 +287,27 @@ def get_watchlist():
     return enriched
 
 @app.post("/api/v1/watchlist")
-def add_to_watchlist(symbol: str = Query(...), company_name: str = Query(default=""), exchange: str = Query(default="NASDAQ")):
+def add_to_watchlist(
+    symbol: str = Query(...), 
+    company_name: str = Query(default=""), 
+    exchange: str = Query(default="NASDAQ"),
+    user_id: Optional[str] = Query(default=None)
+):
     clean = symbol.strip().upper()
     name = company_name or clean
 
     if SessionLocal:
         db = SessionLocal()
         try:
-            existing = db.query(WatchlistModel).filter(WatchlistModel.symbol == clean).first()
+            query = db.query(WatchlistModel).filter(WatchlistModel.symbol == clean)
+            if user_id:
+                query = query.filter(WatchlistModel.user_id == user_id)
+            existing = query.first()
             if existing:
                 return {"status": "exists", "message": "Ticker already pinned"}
             new_row = WatchlistModel(
                 id=str(uuid.uuid4()),
+                user_id=user_id,
                 symbol=clean,
                 company_name=name,
                 exchange=exchange,
@@ -318,12 +331,15 @@ def add_to_watchlist(symbol: str = Query(...), company_name: str = Query(default
         return {"status": "success", "item": entry}
 
 @app.patch("/api/v1/watchlist/{symbol}")
-def update_watchlist_item(symbol: str, payload: WatchlistUpdatePayload):
+def update_watchlist_item(symbol: str, payload: WatchlistUpdatePayload, user_id: Optional[str] = Query(default=None)):
     clean = symbol.strip().upper()
     if SessionLocal:
         db = SessionLocal()
         try:
-            row = db.query(WatchlistModel).filter(WatchlistModel.symbol == clean).first()
+            query = db.query(WatchlistModel).filter(WatchlistModel.symbol == clean)
+            if user_id:
+                query = query.filter(WatchlistModel.user_id == user_id)
+            row = query.first()
             if not row:
                 raise HTTPException(status_code=404, detail="Watchlist item not found")
             if payload.target_buy_price is not None:
@@ -348,12 +364,15 @@ def update_watchlist_item(symbol: str, payload: WatchlistUpdatePayload):
         raise HTTPException(status_code=404, detail="Item not found")
 
 @app.delete("/api/v1/watchlist/{symbol}")
-def remove_from_watchlist(symbol: str):
+def remove_from_watchlist(symbol: str, user_id: Optional[str] = Query(default=None)):
     clean = symbol.strip().upper()
     if SessionLocal:
         db = SessionLocal()
         try:
-            rows = db.query(WatchlistModel).filter(WatchlistModel.symbol == clean).all()
+            query = db.query(WatchlistModel).filter(WatchlistModel.symbol == clean)
+            if user_id:
+                query = query.filter(WatchlistModel.user_id == user_id)
+            rows = query.all()
             for r in rows:
                 db.delete(r)
             db.commit()
