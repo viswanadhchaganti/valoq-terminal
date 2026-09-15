@@ -652,23 +652,60 @@ export default function Home() {
           <ValoqLogo />
 
           <div style={{ position: "relative", flex: 1, maxWidth: "480px" }}>
-            <input
-              type="text"
-              placeholder="Search US or Global Equities (e.g. AAPL, NVDA, TSLA)..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onFocus={() => suggestions.length > 0 && setShowDropdown(true)}
-              style={{
-                width: "100%",
-                padding: "10px 14px",
-                borderRadius: "8px",
-                border: `1px solid ${theme.border}`,
-                background: darkMode ? "#1a2234" : "#ffffff",
-                color: theme.text,
-                fontSize: "0.9rem",
-                outline: "none"
-              }}
-            />
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%" }}>
+              <input
+                type="text"
+                placeholder="Search US or Global Equities (e.g. AAPL, NVDA, TSLA)..."
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && query.trim()) {
+                    handleSelect(query.trim().toUpperCase());
+                    setShowDropdown(false);
+                  }
+                }}
+                onFocus={() => suggestions.length > 0 && setShowDropdown(true)}
+                style={{
+                  flex: 1,
+                  padding: "10px 14px",
+                  borderRadius: "8px",
+                  border: `1px solid ${theme.border}`,
+                  background: darkMode ? "#1a2234" : "#ffffff",
+                  color: theme.text,
+                  fontSize: "0.9rem",
+                  outline: "none"
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (query.trim()) {
+                    handleSelect(query.trim().toUpperCase());
+                    setShowDropdown(false);
+                  }
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  padding: "10px 16px",
+                  background: "#059669",
+                  color: "#ffffff",
+                  border: "none",
+                  borderRadius: "8px",
+                  fontSize: "0.875rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
+                }}
+              >
+                <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                Search
+              </button>
+            </div>
 
             {showDropdown && (
               <div style={{
