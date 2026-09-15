@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: valoq-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - valoq-net
+
+  backend:
+    build:
+      context: ./apex-backend
+      dockerfile: Dockerfile
+    container_name: valoq-backend
+    expose:
+      - "8000"
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - REDIS_URL=${REDIS_URL}
+    restart: unless-stopped
+    networks:
+      - valoq-net
+
+  frontend:
+    build:
+      context: ./apex-frontend
+      dockerfile: Dockerfile
+    container_name: valoq-frontend
+    expose:
+      - "3000"
+    environment:
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - valoq-net
+
+networks:
+  valoq-net:
+    driver: bridge
