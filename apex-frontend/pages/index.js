@@ -1191,9 +1191,7 @@ export default function Home() {
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "20px" }}>
                       <div style={{ background: theme.cardSub, padding: "16px", borderRadius: "10px", border: `1px solid ${theme.border}` }}>
                         <span style={{ fontSize: "0.75rem", color: theme.textSub, fontWeight: 700 }}>VALOQ INTRINSIC FAIR VALUE</span>
-                        <div style={{ fontSize: "2rem", fontWeight: 900, color: theme.text, marginTop: "4px" }}>
-                          {(W?.currency || "₹" || "₹")} {dcfResult.fairValue}
-                        </div>
+                        <div style={{ fontSize: "2rem", fontWeight: 900, color: theme.text, marginTop: "4px" }}>{(W?.currency || "$")} {st.fairValue}</div>
                         <div style={{ fontSize: "0.8rem", color: dcfResult.marginOfSafety >= 0 ? "#00d09c" : "#eb5757", fontWeight: 700, marginTop: "4px" }}>
                           {dcfResult.marginOfSafety >= 0 ? `+${dcfResult.marginOfSafety}% Undervalued (Upside)` : `${dcfResult.marginOfSafety}% Overvalued (Downside)`}
                         </div>
@@ -2177,3 +2175,4 @@ export default function Home() {
 /* client-side hydration guard active */
 // build-stamp: 1789560226
 // dcf-currency-fix: 1789560382
+// fix-dcf-val: 1789560603
