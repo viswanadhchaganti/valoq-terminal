@@ -1,4 +1,32 @@
 
+def resolve_currency_symbol(raw_currency: str, exchange: str = "", symbol: str = "") -> str:
+    sym = (symbol or "").upper()
+    if sym.endswith(".NS") or sym.endswith(".BO") or "NSE" in exchange or "BSE" in exchange:
+        return "₹"
+    if sym.endswith(".L") or "LSE" in exchange or "LON" in exchange:
+        return "£"
+    raw = (raw_currency or "").upper().strip()
+    if raw in ["INR"]:
+        return "₹"
+    if raw in ["GBP", "GBP"]:
+        return "£"
+    if raw in ["EUR"]:
+        return "€"
+    if raw in ["JPY"]:
+        return "¥"
+    return "$"
+
+def resolve_exchange_label(symbol: str, raw_exchange: str = "") -> str:
+    sym = (symbol or "").upper()
+    if sym.endswith(".NS"):
+        return "NSE"
+    if sym.endswith(".BO"):
+        return "BSE"
+    if sym.endswith(".L"):
+        return "LSE"
+    return raw_exchange or "NASDAQ"
+
+
 def resolve_currency_symbol(raw_currency: str, exchange: str = "") -> str:
     raw = (raw_currency or "").upper().strip()
     exch = (exchange or "").upper().strip()
@@ -226,7 +254,8 @@ def get_stock_quote(symbol: str = Query(..., min_length=1), period: str = Query(
                 "symbol": clean_sym,
                 "company_name": f"{clean_sym} Corporation",
                 "exchange": "NASDAQ",
-                "currency": resolve_currency_symbol(info.get("currency", ""), info.get("exchange", "")),
+                "currency": resolve_currency_symbol(info.get("currency", ""), info.get("exchange", ""), clean_sym),
+        "exchange": resolve_exchange_label(clean_sym, info.get("exchange", "")),
                 "price": 235.0,
                 "change": 1.5,
                 "change_pct": 0.65,
@@ -326,7 +355,8 @@ def get_stock_quote(symbol: str = Query(..., min_length=1), period: str = Query(
             "symbol": clean_sym,
             "company_name": info.get("longName") or info.get("shortName") or clean_sym,
             "exchange": info.get("exchange") or "NASDAQ",
-            "currency": resolve_currency_symbol(info.get("currency", ""), info.get("exchange", "")),
+            "currency": resolve_currency_symbol(info.get("currency", ""), info.get("exchange", ""), clean_sym),
+        "exchange": resolve_exchange_label(clean_sym, info.get("exchange", "")),
             "price": curr_price,
             "change": change,
             "change_pct": change_pct,

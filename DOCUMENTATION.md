@@ -127,6 +127,13 @@ Valoq is a full-stack, institutional-grade equity analysis portal inspired by pl
 * **Currency Formatting:** Binds strictly to `quote.currency`, dynamically formatting fair values in **`₹`** (INR), **`£`** (GBP), **`$`** (USD), **`€`** (EUR), or **`¥`** (JPY).
 
 ---
+
+### 2.24. Exchange & Currency Disambiguation Engine
+* **Ticker Suffix Normalization:** Securities with `.NS` and `.BO` are dynamically bound to the **`NSE`** and **`BSE`** exchanges rather than inheriting NASDAQ defaults.
+* **Localized Pricing Telemetry:** Automatic format switching ensures Indian listings show **`₹`** (INR), UK listings show **`£`** (GBP), and US listings show **`$`** (USD) across current price, ranges, and intrinsic fair value models.
+* **Dynamic Fair Value:** Eliminated static $188.41 mock constants, tying intrinsic value directly to market-clearing prices and growth multiples.
+
+---
 ## 3. Database Schema
 
 ```sql

@@ -1,3 +1,24 @@
+
+// Helper to resolve exact currency symbol from ticker or quote
+const getSymbolCurrency = (sym, q) => {
+  if (q && q.currency && q.currency !== "$") return q.currency;
+  const s = (sym || "").toUpperCase();
+  if (s.endsWith(".NS") || s.endsWith(".BO") || s.includes("NSE") || s.includes("BSE")) return "₹";
+  if (s.endsWith(".L") || s.includes("LSE") || s.includes("LON")) return "£";
+  if (s.endsWith(".PA") || s.endsWith(".DE") || s.endsWith(".MC")) return "€";
+  if (s.endsWith(".T")) return "¥";
+  return q?.currency || "$";
+};
+
+const getSymbolExchange = (sym, q) => {
+  if (q && q.exchange && !["NASDAQ", "NYSE", "NMS"].includes(q.exchange)) return q.exchange;
+  const s = (sym || "").toUpperCase();
+  if (s.endsWith(".NS")) return "NSE";
+  if (s.endsWith(".BO")) return "BSE";
+  if (s.endsWith(".L")) return "LSE";
+  return q?.exchange || "NASDAQ";
+};
+
 import React, { useState, useEffect, useRef } from "react";
 import { createChart } from "lightweight-charts";
 import ValoqLogo from "../components/ValoqLogo";
