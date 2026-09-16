@@ -134,6 +134,26 @@ Valoq is a full-stack, institutional-grade equity analysis portal inspired by pl
 * **Dynamic Fair Value:** Eliminated static $188.41 mock constants, tying intrinsic value directly to market-clearing prices and growth multiples.
 
 ---
+
+### 2.25. Universal Variadic Currency Resolver
+* **What it is:** A variadic currency resolver function signature (`*args, **kwargs`) replacing all legacy 2-argument definitions in FastAPI.
+* **Why it matters:** Guarantees backward and forward compatibility across endpoints accepting `(currency, exchange)` and `(currency, exchange, symbol)` signatures without throwing `TypeError` exceptions.
+
+---
+
+### 2.26. Global Currency Normalization Across Terminal Cards
+* **Day & 52-Week Ranges:** Replaced static `$` prefix strings with dynamic currency evaluation (`quote?.currency || '₹'`).
+* **DCF Fair Value & Market Price Widgets:** Bound both values to the active security currency and tied fair valuation directly to `currentPrice` multipliers, eliminating static `$188.41` fallbacks[cite: 1, 2].
+
+---
+
+### 2.27. Edge DNS IP Pool Migration (Vercel Anycast)
+* **What it is:** Upgraded apex and subdomain DNS targets on Porkbun from legacy addresses (`76.76.21.21`) to Vercel's dedicated edge IP routing pool:
+  * **Apex A Record (`@`):** `216.198.79.1`
+  * **Canonical CNAME (`www`):** `5a65d66307dff0be.vercel-dns-017.com.`
+* **Why it matters:** Resolves Vercel's "DNS Change Recommended" warning, improves European/UK edge latency, and utilizes dedicated project DNS clustering.
+
+---
 ## 3. Database Schema
 
 ```sql
