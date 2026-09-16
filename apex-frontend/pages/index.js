@@ -29,6 +29,8 @@ import html2canvas from "html2canvas";
 const API_BASE = "https://api.valoq.co.uk";
 
 export default function Home() {
+  const W = typeof quote !== 'undefined' && quote ? quote : { price: 0, change: 0, change_pct: 0, currency: '₹', exchange: 'NSE', scorecard: {}, financials: null, peers: [] };
+
   const [ticker, setTicker] = useState("AAPL");
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState([]);
