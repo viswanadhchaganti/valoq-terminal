@@ -121,6 +121,12 @@ Valoq is a full-stack, institutional-grade equity analysis portal inspired by pl
 * **Why it matters:** Provides an accessible interface for mouse, mobile, and tablet interactions without relying strictly on hardware `Enter` keystrokes.
 
 ---
+
+### 2.23. Dynamic Market-Aligned Intrinsic Valuation
+* **What it is:** A dynamic fair value calculation layer that replaces static fallback constants ($188) with real-time valuation multiples indexed to the underlying security's live quote price and P/E ratio.
+* **Currency Formatting:** Binds strictly to `quote.currency`, dynamically formatting fair values in **`₹`** (INR), **`£`** (GBP), **`$`** (USD), **`€`** (EUR), or **`¥`** (JPY).
+
+---
 ## 3. Database Schema
 
 ```sql
