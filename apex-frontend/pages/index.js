@@ -1,13 +1,13 @@
 
 // Helper to resolve exact currency symbol from ticker or quote
 const getSymbolCurrency = (sym, q) => {
-  if (q && q.currency && q.currency !== W.currency || "₹") return q.currency;
+  if (q && q.currency && q.currency !== W?.currency || "₹" || "₹") return q.currency;
   const s = (sym || "").toUpperCase();
   if (s.endsWith(".NS") || s.endsWith(".BO") || s.includes("NSE") || s.includes("BSE")) return "₹";
   if (s.endsWith(".L") || s.includes("LSE") || s.includes("LON")) return "£";
   if (s.endsWith(".PA") || s.endsWith(".DE") || s.endsWith(".MC")) return "€";
   if (s.endsWith(".T")) return "¥";
-  return q?.currency || W.currency || "₹";
+  return q?.currency || W?.currency || "₹" || "₹";
 };
 
 const getSymbolExchange = (sym, q) => {
@@ -1190,7 +1190,7 @@ export default function Home() {
                       <div style={{ background: theme.cardSub, padding: "16px", borderRadius: "10px", border: `1px solid ${theme.border}` }}>
                         <span style={{ fontSize: "0.75rem", color: theme.textSub, fontWeight: 700 }}>VALOQ INTRINSIC FAIR VALUE</span>
                         <div style={{ fontSize: "2rem", fontWeight: 900, color: theme.text, marginTop: "4px" }}>
-                          {(W.currency || "₹")} {dcfResult.fairValue}
+                          {(W?.currency || "₹" || "₹")} {dcfResult.fairValue}
                         </div>
                         <div style={{ fontSize: "0.8rem", color: dcfResult.marginOfSafety >= 0 ? "#00d09c" : "#eb5757", fontWeight: 700, marginTop: "4px" }}>
                           {dcfResult.marginOfSafety >= 0 ? `+${dcfResult.marginOfSafety}% Undervalued (Upside)` : `${dcfResult.marginOfSafety}% Overvalued (Downside)`}
@@ -1329,7 +1329,7 @@ export default function Home() {
                                         color: isGreen ? (darkMode ? "#6ee7b7" : "#047857") : (darkMode ? "#fca5a5" : "#b91c1c")
                                       }}
                                     >
-                                      <div>{(W.currency || "₹")} {cell.fairValue}</div>
+                                      <div>{(W?.currency || "₹" || "₹")} {cell.fairValue}</div>
                                       <div style={{ fontSize: "0.65rem", opacity: 0.85 }}>
                                         {cell.upside >= 0 ? "+" : ""}{cell.upside}%
                                       </div>
