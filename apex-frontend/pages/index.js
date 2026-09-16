@@ -29,7 +29,10 @@ import html2canvas from "html2canvas";
 const API_BASE = "https://api.valoq.co.uk";
 
 export default function Home() {
-  const W = typeof quote !== 'undefined' && quote ? quote : (typeof W_fallback !== 'undefined' ? W_fallback : { price: 0, currency: '$' });
+  // Safely define quote object W first
+  const W = typeof quote !== 'undefined' && quote ? quote : { price: 0, change: 0, change_pct: 0, currency: '$', exchange: 'NASDAQ', scorecard: {}, financials: null, peers: [] };
+  
+  // Then define DCF calculation and currency helpers using W
   const sd = () => {
     if (!W || typeof W.price !== 'number' || W.price <= 0) return { fairValue: 0, marginOfSafety: 0, enterpriseValue: 0, pvFutureFCF: 0, pvTerminalValue: 0 };
     let baseFCF = W.price * 0.065;
@@ -42,8 +45,6 @@ export default function Home() {
   };
   const st = sd();
   const curr = (W?.currency === "USD" || !W?.currency) ? "$" : W.currency;
-
-  const W = typeof quote !== 'undefined' && quote ? quote : { price: 0, change: 0, change_pct: 0, currency: '₹', exchange: 'NSE', scorecard: {}, financials: null, peers: [] };
 
   const [ticker, setTicker] = useState("AAPL");
   const [query, setQuery] = useState("");
@@ -2194,3 +2195,4 @@ export default function Home() {
 // fix-dcf-val: 1789560603
 // fix-st-ref: 1789560831
 // fix-root-scope: 1789560979
+// build-fix-order: 1789565157
