@@ -1,20 +1,31 @@
 
-def resolve_currency_symbol(raw_currency: str, exchange: str = "", symbol: str = "") -> str:
-    sym = (symbol or "").upper()
-    if sym.endswith(".NS") or sym.endswith(".BO") or "NSE" in exchange or "BSE" in exchange:
+def resolve_currency_symbol(*args, **kwargs) -> str:
+    raw_currency = args[0] if len(args) > 0 else kwargs.get("raw_currency", "")
+    exchange = args[1] if len(args) > 1 else kwargs.get("exchange", "")
+    symbol = args[2] if len(args) > 2 else kwargs.get("symbol", "")
+    sym = str(symbol or "").upper().strip()
+    exch = str(exchange or "").upper().strip()
+    raw = str(raw_currency or "").upper().strip()
+    if sym.endswith(".NS") or sym.endswith(".BO") or "NSE" in exch or "BSE" in exch or raw == "INR":
         return "₹"
-    if sym.endswith(".L") or "LSE" in exchange or "LON" in exchange:
+    if sym.endswith(".L") or "LSE" in exch or "LON" in exch or raw in ["GBP", "GBX", "GBP"]:
         return "£"
-    raw = (raw_currency or "").upper().strip()
-    if raw in ["INR"]:
-        return "₹"
-    if raw in ["GBP", "GBP"]:
-        return "£"
-    if raw in ["EUR"]:
+    if raw == "EUR" or any(sym.endswith(x) for x in [".PA", ".DE", ".MC", ".AS", ".MI"]):
         return "€"
-    if raw in ["JPY"]:
+    if raw == "JPY" or sym.endswith(".T"):
         return "¥"
     return "$"
+
+def resolve_exchange_label(symbol: str, raw_exchange: str = "") -> str:
+    sym = str(symbol or "").upper().strip()
+    if sym.endswith(".NS"):
+        return "NSE"
+    if sym.endswith(".BO"):
+        return "BSE"
+    if sym.endswith(".L"):
+        return "LSE"
+    return raw_exchange or "NASDAQ"
+
 
 def resolve_exchange_label(symbol: str, raw_exchange: str = "") -> str:
     sym = (symbol or "").upper()
@@ -26,25 +37,6 @@ def resolve_exchange_label(symbol: str, raw_exchange: str = "") -> str:
         return "LSE"
     return raw_exchange or "NASDAQ"
 
-
-def resolve_currency_symbol(raw_currency: str, exchange: str = "") -> str:
-    raw = (raw_currency or "").upper().strip()
-    exch = (exchange or "").upper().strip()
-    if raw in ["INR"] or exch in ["NSE", "BSE", "NSI"]:
-        return "₹"
-    if raw in ["GBP", "GBp"] or "LSE" in exch or exch in ["LON"]:
-        return "£"
-    if raw in ["EUR"]:
-        return "€"
-    if raw in ["JPY"]:
-        return "¥"
-    if raw in ["CAD"]:
-        return "CA$"
-    if raw in ["AUD"]:
-        return "A$"
-    if raw in ["CHF"]:
-        return "CHF "
-    return "$"
 
 import os
 import sys
