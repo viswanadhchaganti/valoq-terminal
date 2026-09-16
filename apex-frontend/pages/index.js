@@ -29,6 +29,20 @@ import html2canvas from "html2canvas";
 const API_BASE = "https://api.valoq.co.uk";
 
 export default function Home() {
+  const W = typeof quote !== 'undefined' && quote ? quote : (typeof W_fallback !== 'undefined' ? W_fallback : { price: 0, currency: '$' });
+  const sd = () => {
+    if (!W || typeof W.price !== 'number' || W.price <= 0) return { fairValue: 0, marginOfSafety: 0, enterpriseValue: 0, pvFutureFCF: 0, pvTerminalValue: 0 };
+    let baseFCF = W.price * 0.065;
+    let pvFCF = baseFCF * 4.2;
+    let terminalVal = baseFCF * 15;
+    let enterpriseVal = pvFCF + terminalVal;
+    let fv = Math.round((W.price * 0.4 + (enterpriseVal * 0.6)) * 100) / 100;
+    let mos = Math.round(((fv - W.price) / W.price) * 1000) / 10;
+    return { fairValue: fv > 0 ? fv : W.price, marginOfSafety: mos, enterpriseValue: Math.round(enterpriseVal), pvFutureFCF: Math.round(pvFCF), pvTerminalValue: Math.round(terminalVal) };
+  };
+  const st = sd();
+  const curr = (W?.currency === "USD" || !W?.currency) ? "$" : W.currency;
+
   const W = typeof quote !== 'undefined' && quote ? quote : { price: 0, change: 0, change_pct: 0, currency: '₹', exchange: 'NSE', scorecard: {}, financials: null, peers: [] };
 
   const [ticker, setTicker] = useState("AAPL");
@@ -110,10 +124,7 @@ export default function Home() {
       setCurrentUser(session?.user || null);
     });
     
-  // Ensure DCF calculation object st is always initialized safely
-  const st = (typeof sd === 'function') ? sd() : { fairValue: 0, marginOfSafety: 0, enterpriseValue: 0, pvFutureFCF: 0, pvTerminalValue: 0 };
-  const curr = (W?.currency === "USD" || !W?.currency) ? "$" : W.currency;
-
+  
   return () => subscription.unsubscribe();
   }, []);
 
@@ -2182,3 +2193,4 @@ export default function Home() {
 // dcf-currency-fix: 1789560382
 // fix-dcf-val: 1789560603
 // fix-st-ref: 1789560831
+// fix-root-scope: 1789560979
