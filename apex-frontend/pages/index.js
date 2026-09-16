@@ -109,7 +109,12 @@ export default function Home() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setCurrentUser(session?.user || null);
     });
-    return () => subscription.unsubscribe();
+    
+  // Ensure DCF calculation object st is always initialized safely
+  const st = (typeof sd === 'function') ? sd() : { fairValue: 0, marginOfSafety: 0, enterpriseValue: 0, pvFutureFCF: 0, pvTerminalValue: 0 };
+  const curr = (W?.currency === "USD" || !W?.currency) ? "$" : W.currency;
+
+  return () => subscription.unsubscribe();
   }, []);
 
   const fetchStock = async (sym, period) => {
@@ -2176,3 +2181,4 @@ export default function Home() {
 // build-stamp: 1789560226
 // dcf-currency-fix: 1789560382
 // fix-dcf-val: 1789560603
+// fix-st-ref: 1789560831
